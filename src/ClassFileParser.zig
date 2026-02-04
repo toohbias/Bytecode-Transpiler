@@ -28,6 +28,7 @@ pub fn parseStruct(T: type, instance: *ClassFile.ClassFile, reader: *Reader, all
                             if(i != 0 
                             and @TypeOf(item) == ClassFile.cp_info 
                             and (std.meta.activeTag(arr[i-1]) == ClassFile.cp_info.Long or std.meta.activeTag(arr[i-1]) == ClassFile.cp_info.Double)) {
+                                arr[i] = @unionInit(ClassFile.cp_info, "Empty", undefined);
                                 continue;
                             } // "In retrospect, making 8-byte constants take two constant pool entries was a poor choice" -Java ClassFile Spec
                             arr[i] = try parseStruct(@TypeOf(item), instance, reader, allocator);

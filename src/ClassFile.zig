@@ -32,6 +32,7 @@ pub const ClassFile = struct {
 };
 
 pub const cp_info = union(enum(u8)) {
+    Empty: struct {} = 0, // not in spec; set after Long/Double
     Utf8: struct {
         length: u16,
         bytes: []u8,

@@ -12,4 +12,18 @@ pub fn main() !void {
     var cf: ClassFile.ClassFile = undefined;
     _ = try Parser.parseStruct(ClassFile.ClassFile, &cf, &byteReader, allocator);
     std.debug.print("\n{}\n", .{try byteReader.discardRemaining()}); // should be 0
+    
+    var buffer: [1024]u8 = undefined;
+    var file = try std.fs.cwd().createFile("output.zon", .{});
+    defer file.close();
+    var writer = file.writer(&buffer);
+    const stdout = &writer.interface;
+
+    try printClassFile(&cf, stdout);
+}
+
+pub fn printClassFile(classFile: *ClassFile.ClassFile, writer: *std.Io.Writer) !void {
+    @setEvalBranchQuota(25000);
+    try std.zon.stringify.serializeArbitraryDepth(classFile.*, .{}, writer);
+    try writer.flush();
 }
