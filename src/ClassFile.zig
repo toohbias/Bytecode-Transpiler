@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const OpCode = @import("OpCode.zig").OpCode;
+
 pub const ClassFile = struct {
     magic: u32,
     minor_version: u16,
@@ -149,43 +151,10 @@ pub const method_info = struct {
     };
 };
 
-pub const attribute_info_enum = enum {
-    ConstantValue,
-    Code,
-    StackMapTable,
-    Exceptions,
-    InnerClasses,
-    EnclosingMethod,
-    Synthetic,
-    Signature,
-    SourceFile,
-    SourceDebugExtension,
-    LineNumberTable,
-    LocalVariableTable,
-    LocalVariableTypeTable,
-    Deprecated,
-    RuntimeVisibleAnnotations,
-    RuntimeInvisibleAnnotations,
-    RuntimeVisibleParameterAnnotations,
-    RuntimeInvisibleParameterAnnotations,
-    RuntimeVisibleTypeAnnotations,
-    RuntimeInvisibleTypeAnnotations,
-    AnnotationDefault,
-    BootstrapMethods,
-    MethodParameters,
-    Module,
-    ModulePackages,
-    ModuleMainClass,
-    NestHost,
-    NestMembers,
-    Record,
-    PermittedSubclasses,
-};
-
 pub const attribute_info = struct {
     attribute_name_index: u16,
     attribute_length: u32,
-    info: union(attribute_info_enum) {
+    info: union(enum) {
         ConstantValue: struct {
             constantvalue_index: u16,
         },

@@ -35,14 +35,14 @@ pub fn parseStruct(T: type, instance: *ClassFile.ClassFile, reader: *Reader, all
                         }
                         break :ret arr;
                     },
-                    .@"union" => ret: {
+                    .@"union" => |u| ret: {
                         var resultIn: f.type = undefined;
                         // in attribute_info, switch depending on attribute_name_index
                         if(std.mem.eql(u8, f.name, "info")) {
                             if(it <= 1) { std.debug.print("{s}\n", .{s.fields[it].name}); @panic("where?"); } // bounds checking to prevent compiler error
                             const index = @field(result, s.fields[it-2].name) - 1;
                             const fieldName = instance.*.constant_pool[index].Utf8.bytes;
-                            const enumVariant = std.meta.stringToEnum(ClassFile.attribute_info_enum, fieldName).?;
+                            const enumVariant = std.meta.stringToEnum(u.tag_type.?, fieldName).?;
                             resultIn = switch (enumVariant) { inline else => |t| retIn: {
                                 const fieldType = @FieldType(f.type, @tagName(t));
                                 break :retIn @unionInit(f.type, @tagName(t), try parseStruct(fieldType, instance, reader, allocator));
