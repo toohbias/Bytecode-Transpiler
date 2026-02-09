@@ -25,4 +25,18 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
+
+
+    const unit_test = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+        }),
+    });
+
+    const test_step = b.step("test", "Run unit tests");
+
+    const test_cmd = b.addRunArtifact(unit_test);
+    test_step.dependOn(&test_cmd.step);
+
 }

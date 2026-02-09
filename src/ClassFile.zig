@@ -162,7 +162,8 @@ pub const attribute_info = struct {
             max_stack: u16,
             max_locals: u16,
             code_length: u32,
-            code: []u8,
+            code: []OpCode,     // I only know the byte size, not the amount of instructions
+            opcode_count: u32,  // store it here after
             exception_table_length: u16,
             exception_table: []struct {
                 start_pc: u16,
@@ -393,7 +394,7 @@ pub const record_component_info = struct {
 };
 
 pub const type_annotation = struct {
-    target_type: u8, //https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.7.20
+    target_type: u8, // TODO https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.7.20
     target_info: union(enum) {
         type_parameter_target: struct {
             type_parameter: u8,

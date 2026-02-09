@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Reader = std.Io.Reader;
 const ClassFile = @import("ClassFile.zig");
+const OpCode = @import("OpCode.zig").OpCode;
 
 // most cursed function I've ever made in my life
 pub fn parseStruct(T: type, instance: *ClassFile.ClassFile, reader: *Reader, allocator: Allocator) anyerror!T {
@@ -9,10 +10,22 @@ pub fn parseStruct(T: type, instance: *ClassFile.ClassFile, reader: *Reader, all
 
     switch(@typeInfo(T)) {
         .@"struct" => |s| {
-            inline for(s.fields, 0..) |f, it| {
+        inline for(s.fields, 0..) |f, it| {
+
                 // can't forward this stuff to a new function call because other field values from the struct are necessary
                 @field(result, f.name) = switch (@typeInfo(f.type)) {
-                    .int => |i| try reader.takeInt(@Type(.{.int = i}), .big),
+                    .int => |i| ret: {
+                        if(@hasField(T, "code") and std.mem.eql(u8, f.name, "opcode_count")) {
+                            if(it == 0) { std.debug.print("{s}\n", .{s.fields[it].name}); @panic("where?"); } // bounds checking to prevent compiler error
+
+                            const size = @field(result, f.name);
+                            const old_arr: []OpCode = @field(result, "code");
+                            const new_arr: []OpCode = allocator.remap(old_arr, size).?;
+                            @field(result, "code") = new_arr;
+                            break :ret size;
+                        }
+                        break :ret try reader.takeInt(@Type(.{.int = i}), .big);
+                    },
                     .pointer => |p| ret: {
                         if(it == 0) { std.debug.print("{s}\n", .{s.fields[it].name}); @panic("where?"); } // bounds checking to prevent compiler error
                         var arr = if(std.mem.eql(u8, f.name, "constant_pool"))                                                                      // cp_info
@@ -24,14 +37,28 @@ pub fn parseStruct(T: type, instance: *ClassFile.ClassFile, reader: *Reader, all
                         else                                                                                                                        // default
                             try allocator.alloc(p.child, @field(result, s.fields[it-1].name))
                         ;
-                        for(arr, 0..) |item, i| {
-                            if(i != 0 
-                            and @TypeOf(item) == ClassFile.cp_info 
-                            and (std.meta.activeTag(arr[i-1]) == ClassFile.cp_info.Long or std.meta.activeTag(arr[i-1]) == ClassFile.cp_info.Double)) {
-                                arr[i] = @unionInit(ClassFile.cp_info, "Empty", undefined);
-                                continue;
-                            } // "In retrospect, making 8-byte constants take two constant pool entries was a poor choice" -Java ClassFile Spec
-                            arr[i] = try parseStruct(@TypeOf(item), instance, reader, allocator);
+
+                        // we don't know how many OpCode elements there are
+                        if(f.type == []OpCode) {
+                            var offset: u32 = 0;
+                            const size: u32 = @field(result, "code_length");
+                            var i: u32 = 0;
+                            while(offset < size) {
+                                arr[i], offset = try OpCode.parse(offset, reader, allocator);
+                                i += 1;
+                            }
+                            if(offset != size) @panic("Invalid Code Length!\n");
+                            @field(result, "opcode_count") = i;
+                        } else {
+                            for(arr, 0..) |item, i| {
+                                if(i != 0 
+                                and @TypeOf(item) == ClassFile.cp_info 
+                                and (std.meta.activeTag(arr[i-1]) == ClassFile.cp_info.Long or std.meta.activeTag(arr[i-1]) == ClassFile.cp_info.Double)) {
+                                    arr[i] = @unionInit(ClassFile.cp_info, "Empty", undefined);
+                                    continue;
+                                } // "In retrospect, making 8-byte constants take two constant pool entries was a poor choice" -Java ClassFile Spec
+                                arr[i] = try parseStruct(@TypeOf(item), instance, reader, allocator);
+                            }
                         }
                         break :ret arr;
                     },
