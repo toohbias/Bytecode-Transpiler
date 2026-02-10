@@ -1,6 +1,7 @@
 const std = @import("std");
 const Bytecode_Transpiler = @import("Bytecode_Transpiler");
 const Parser = @import("ClassFileParser.zig");
+const Validator = @import("ClassFileValidator.zig");
 const ClassFile = @import("ClassFile.zig");
 const OpCode = @import("OpCode.zig").OpCode;
 
@@ -15,7 +16,7 @@ test "does it parse" {
     var cf: ClassFile.ClassFile = undefined;
     _ = try Parser.parseStruct(ClassFile.ClassFile, &cf, &byteReader, allocator);
 
-    try std.testing.expect(try byteReader.discardRemaining() == 0);
+    Validator.validate(&cf, &byteReader, .{});
     
     var buffer: [1024]u8 = undefined;
     var file = try std.fs.cwd().createFile("output.json", .{});

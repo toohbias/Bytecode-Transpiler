@@ -39,19 +39,18 @@ pub const cp_info = union(enum(u8)) {
         length: u16,
         bytes: []u8,
     } = 1,
+    // parse numeric values directly
     Integer: struct {
-        bytes: u32,
+        bytes: i32,
     } = 3,
     Float: struct {
-        bytes: u32,
+        bytes: f32,
     } = 4,
     Long: struct {
-        high_bytes: u32,
-        low_bytes: u32,
+        bytes: i64,
     } = 5,
     Double: struct {
-        high_bytes: u32,
-        low_bytes: u32,
+        bytes: f64,
     } = 6,
     Class: struct {
         name_index: u16,

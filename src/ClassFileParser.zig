@@ -26,6 +26,7 @@ pub fn parseStruct(T: type, instance: *ClassFile.ClassFile, reader: *Reader, all
                         }
                         break :ret try reader.takeInt(@Type(.{.int = i}), .big);
                     },
+                    .float => |n| @as( @Type( .{.float = n}), @bitCast( try reader.takeInt( @Type( .{.int = .{ .bits = n.bits, .signedness = .unsigned} }) , .big))),
                     .pointer => |p| ret: {
                         if(it == 0) { std.debug.print("{s}\n", .{s.fields[it].name}); @panic("where?"); } // bounds checking to prevent compiler error
                         var arr = if(std.mem.eql(u8, f.name, "constant_pool"))                                                                      // cp_info
@@ -119,6 +120,7 @@ pub fn parseStruct(T: type, instance: *ClassFile.ClassFile, reader: *Reader, all
             }
         },
         .int => |i| result = try reader.takeInt(@Type(.{.int = i}), .big),
+        .float => |n| @as( @Type( .{.float = n}), @bitCast( try reader.takeInt( @Type( .{.int = .{ .bits = n.bits, .signedness = .unsigned} }) , .big))),
         else => |t| std.debug.print("{} not implemented yet!\n", .{@Type(t)}),
     }
     return result;
