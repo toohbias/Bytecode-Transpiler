@@ -18,7 +18,7 @@ test "does it parse" {
     try std.testing.expect(try byteReader.discardRemaining() == 0);
     
     var buffer: [1024]u8 = undefined;
-    var file = try std.fs.cwd().createFile("output.zon", .{});
+    var file = try std.fs.cwd().createFile("output.json", .{});
     defer file.close();
     var writer = file.writer(&buffer);
     const stdout = &writer.interface;
@@ -28,6 +28,6 @@ test "does it parse" {
 
 pub fn printClassFile(classFile: *ClassFile.ClassFile, writer: *std.Io.Writer) !void {
     @setEvalBranchQuota(500000);
-    try std.zon.stringify.serializeArbitraryDepth(classFile.*, .{}, writer);
+    try std.json.Stringify.value(classFile.*, .{ .whitespace = .indent_2}, writer);
     try writer.flush();
 }

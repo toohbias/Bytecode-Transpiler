@@ -194,7 +194,15 @@ pub const OpCode = union(enum(u8)) {
         high: i32,
         size: i32,          // high-low+1 elements
         offsets: [*]i32,    // this brings down the size of each OpCode by 8 bytes
-// TODO: figure out how to serialize raw pointers
+        
+        pub fn jsonStringify(self: @This(), jws: anytype) !void {
+            try jws.beginObject();
+            try jws.write(self.default);
+            try jws.write(self.low);
+            try jws.write(self.high);
+            try jws.write(self.offsets[0..@intCast(self.size)]);
+            try jws.endObject();
+        }
     } = 0xaa,
     lookupswitch: struct {
         default: i32,
@@ -205,6 +213,14 @@ pub const OpCode = union(enum(u8)) {
             match: i32,
             offset: i32,
         };
+
+        pub fn jsonStringify(self: @This(), jws: anytype) !void {
+            try jws.beginObject();
+            try jws.write(self.default);
+            try jws.write(self.npairs);
+            try jws.write(self.pairs[0..@intCast(self.npairs)]);
+            try jws.endObject();
+        }
     } = 0xab,
     ireturn: struct {} = 0xac,
     lreturn: struct {} = 0xad,
