@@ -36,8 +36,13 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
+            .link_libc = true,
         }),
     });
+
+    unit_test.root_module.addIncludePath(upstream.path(""));
+    unit_test.root_module.addCSourceFile(.{ .file = upstream.path("miniz.c") });
+    unit_test.installHeader(upstream.path(""), "miniz.h");
 
     const test_step = b.step("test", "Run unit tests");
 

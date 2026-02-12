@@ -6,28 +6,35 @@ const ClassFile = @import("ClassFile.zig");
 const OpCode = @import("OpCode.zig").OpCode;
 const VFS = @import("VFS.zig");
 
-pub fn main() void {
-    VFS.version();
-}
+pub fn main() void {}
 
 test "does it parse" {
     var arenaAllocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arenaAllocator.allocator();
     defer arenaAllocator.deinit();
 
-    var byteReader = try Parser.getSourceReader("/home/tobi/doc/projects/casino/out/production/casino/src/View_GUI/CasinoView.class", allocator);
+    // var byteReader = try Parser.getSourceReader("/home/tobi/doc/projects/casino/out/production/casino/src/View_GUI/CasinoView.class", allocator);
+    var byteReader = try Parser.getSourceReader("/home/tobi/test/LaunchSupport.class", allocator);
     var cf: ClassFile.ClassFile = undefined;
     _ = try Parser.parseStruct(ClassFile.ClassFile, &cf, &byteReader, allocator);
 
     Validator.validate(&cf, &byteReader, .{});
     
-    var buffer: [1024]u8 = undefined;
+    var buffer: [4096]u8 = undefined;
     var file = try std.fs.cwd().createFile("output.json", .{});
     defer file.close();
     var writer = file.writer(&buffer);
     const stdout = &writer.interface;
 
     try printClassFile(&cf, stdout);
+}
+
+test "zip" {
+    var arenaAllocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arenaAllocator.allocator();
+    defer arenaAllocator.deinit();
+     
+    try VFS.readZip(allocator, "/home/tobi/doc/ghidra/support/LaunchSupport.jar");
 }
 
 pub fn printClassFile(classFile: *ClassFile.ClassFile, writer: *std.Io.Writer) !void {

@@ -194,12 +194,16 @@ pub const OpCode = union(enum(u8)) {
         high: i32,
         size: i32,          // high-low+1 elements
         offsets: [*]i32,    // this brings down the size of each OpCode by 8 bytes
-        
+
         pub fn jsonStringify(self: @This(), jws: anytype) !void {
             try jws.beginObject();
+            try jws.objectField("default");
             try jws.write(self.default);
+            try jws.objectField("low");
             try jws.write(self.low);
+            try jws.objectField("high");
             try jws.write(self.high);
+            try jws.objectField("offsets");
             try jws.write(self.offsets[0..@intCast(self.size)]);
             try jws.endObject();
         }
@@ -216,8 +220,11 @@ pub const OpCode = union(enum(u8)) {
 
         pub fn jsonStringify(self: @This(), jws: anytype) !void {
             try jws.beginObject();
+            try jws.objectField("default");
             try jws.write(self.default);
+            try jws.objectField("npairs");
             try jws.write(self.npairs);
+            try jws.objectField("pairs");
             try jws.write(self.pairs[0..@intCast(self.npairs)]);
             try jws.endObject();
         }
@@ -287,7 +294,9 @@ pub const OpCode = union(enum(u8)) {
         new_offset += 1;
         return switch(enumVariant) {
             inline .tableswitch => ret: {
-                reader.toss(if(new_offset % 4 == 0) 0 else 4 - (new_offset % 4)); // padding
+                const padding = if(new_offset % 4 == 0) 0 else 4 - (new_offset % 4);
+                reader.toss(padding); // padding
+                new_offset += padding;
                 const default = try reader.takeInt(i32, .big);
                 const low = try reader.takeInt(i32, .big);
                 const high = try reader.takeInt(i32, .big);
@@ -310,9 +319,12 @@ pub const OpCode = union(enum(u8)) {
                 };
             },
             inline .lookupswitch => ret: {
-                reader.toss(if(new_offset % 4 == 0) 0 else 4 - (new_offset % 4)); // padding
+                const padding = if(new_offset % 4 == 0) 0 else 4 - (new_offset % 4);
+                reader.toss(padding); // padding
+                new_offset += padding;
                 const default = try reader.takeInt(i32, .big);
                 const npairs = try reader.takeInt(i32, .big);
+                new_offset += 8;
                 const pairs = try allocator.alloc(@FieldType(OpCode, "lookupswitch").pair, @intCast(npairs));
                 for(0..@intCast(npairs)) |it| {
                     pairs[it] = .{
