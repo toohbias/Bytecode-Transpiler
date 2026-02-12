@@ -4,8 +4,11 @@ const Parser = @import("ClassFileParser.zig");
 const Validator = @import("ClassFileValidator.zig");
 const ClassFile = @import("ClassFile.zig");
 const OpCode = @import("OpCode.zig").OpCode;
+const VFS = @import("VFS.zig");
 
-pub fn main() void {}
+pub fn main() void {
+    VFS.version();
+}
 
 test "does it parse" {
     var arenaAllocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);

@@ -35,7 +35,7 @@ fn validateReader(reader: *std.Io.Reader, options: LoggingOptions) FormatError!v
         log.err("failed file length validation", .{});
         return FormatError.InvalidFileLength;
     }
-    if(options.verbose) log.info("passed magic validation", .{});
+    if(options.verbose) log.info("passed file length validation", .{});
 }
 
 fn validateConstantPool(classFile: *ClassFile.ClassFile, options: LoggingOptions) FormatError!void {
@@ -240,5 +240,5 @@ fn validateConstantPool(classFile: *ClassFile.ClassFile, options: LoggingOptions
             .Empty => {},
         }
     }
-    if(options.verbose) log.info("passed magic validation", .{});
+    if(options.verbose) log.info("passed constant pool validation", .{});
 }
