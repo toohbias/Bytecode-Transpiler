@@ -13,8 +13,7 @@ test "does it parse" {
     const allocator = arenaAllocator.allocator();
     defer arenaAllocator.deinit();
 
-    // var byteReader = try Parser.getSourceReader("/home/tobi/doc/projects/casino/out/production/casino/src/View_GUI/CasinoView.class", allocator);
-    var byteReader = try Parser.getSourceReader("/home/tobi/test/LaunchSupport.class", allocator);
+    var byteReader = try Parser.getSourceReader("/home/tobi/doc/projects/casino/out/production/casino/src/View_GUI/CasinoView.class", allocator);
     var cf: ClassFile.ClassFile = undefined;
     _ = try Parser.parseStruct(ClassFile.ClassFile, &cf, &byteReader, allocator);
 
@@ -34,7 +33,8 @@ test "zip" {
     const allocator = arenaAllocator.allocator();
     defer arenaAllocator.deinit();
      
-    try VFS.readZip(allocator, "/home/tobi/doc/ghidra/support/LaunchSupport.jar");
+    try VFS.readJar("/home/tobi/dld/client.jar", null, allocator);
+    // try VFS.readJar("/home/tobi/doc/ghidra/support/LaunchSupport.jar", null, allocator);
 }
 
 pub fn printClassFile(classFile: *ClassFile.ClassFile, writer: *std.Io.Writer) !void {
