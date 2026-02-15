@@ -11,6 +11,7 @@ const ZipError = error {
     StatFailed,
     ExtractionFailed,
     InvalidClassFilePath,
+    IndexingFailed,
 };
 
 const Manifest = struct {
@@ -78,7 +79,35 @@ pub fn readJar(path: []const u8, classpath: ?[]const u8, allocator: Allocator) Z
         else return ZipError.InvalidClassFilePath
     else return ZipError.InvalidClassFilePath;
 
-    std.debug.print("{s}\n", .{filename});
+    const root: ClassFile.ClassFile = try parseClassFromArchive(&archive, filename, allocator);
+    
+    for(root.constant_pool) |pool| {
+        if(std.meta.activeTag(pool) == .Class) {
+            std.debug.print("Class: {s}\n", .{root.constant_pool[pool.Class.name_index - 1].Utf8.bytes});
+        }
+    }
+}
+
+pub fn parseClassFromArchive(archive: *zip.mz_zip_archive, name: []const u8, allocator: Allocator) ZipError!ClassFile.ClassFile {
+    const file_index = zip.mz_zip_reader_locate_file(archive, name.ptr, null, 0);
+    if(file_index == -1) return ZipError.IndexingFailed;
+
+    var stat: zip.mz_zip_archive_file_stat = undefined;
+    if(zip.mz_zip_reader_file_stat(archive, @intCast(file_index), &stat) != zip.MZ_TRUE) return ZipError.StatFailed;
+
+    const buffer = allocator.alloc(u8, stat.m_uncomp_size) catch unreachable;
+    if(zip.mz_zip_reader_extract_to_mem(
+        archive, 
+        @intCast(file_index), 
+        buffer.ptr, 
+        buffer.len, 
+        0
+    ) != zip.MZ_TRUE) return ZipError.ExtractionFailed;
+
+    var reader = std.Io.Reader.fixed(buffer);
+    var result = ClassFile.ClassFile.parse(&reader, allocator) catch unreachable;
+    Validator.validate(&result, &reader, .{});
+    return result;
 }
 
 fn extractManifest(archive: *zip.mz_zip_archive, allocator: Allocator) ZipError!?Manifest {
@@ -90,7 +119,7 @@ fn extractManifest(archive: *zip.mz_zip_archive, allocator: Allocator) ZipError!
         archive, 
         @intCast(manifest_index), 
         &manifest_stat
-    ) != zip.MZ_TRUE) { return ZipError.StatFailed; }
+    ) != zip.MZ_TRUE) return ZipError.StatFailed; 
 
     const manifest_buffer = allocator.alloc(u8, manifest_stat.m_uncomp_size) catch unreachable;
     if(zip.mz_zip_reader_extract_to_mem(
@@ -99,7 +128,7 @@ fn extractManifest(archive: *zip.mz_zip_archive, allocator: Allocator) ZipError!
         manifest_buffer.ptr, 
         manifest_buffer.len, 
         0
-    ) != zip.MZ_TRUE) { return ZipError.ExtractionFailed; }
+    ) != zip.MZ_TRUE) return ZipError.ExtractionFailed; 
 
     const manifest_enum = std.meta.FieldEnum(Manifest);
     var manifest: Manifest = .{};

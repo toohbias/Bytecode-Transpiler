@@ -448,7 +448,7 @@ pub const record_component_info = struct {
 };
 
 pub const type_annotation = struct {
-    target_type: u8, // TODO https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.7.20
+    target_type: u8,
     target_info: union(enum) {
         type_parameter_target: struct {
             type_parameter: u8,
@@ -485,6 +485,59 @@ pub const type_annotation = struct {
             offset: u16,
             type_argument_index: u8,
         },
+
+        pub fn callback(
+            T: type,
+            parent: anytype,
+            comptime _: usize,
+            instance: *ClassFile,
+            reader: *Reader,
+            allocator: Allocator
+        ) Parser.ParseError!T {
+            return switch(parent.target_type) {
+                inline 0x00, 0x01 => @unionInit(
+                    T, "type_parameter_target", 
+                    try Parser.parseGenericStruct(@FieldType(T, "type_parameter_target"), instance, reader, allocator)
+                ),
+                inline 0x10 => @unionInit(
+                    T, "supertype_target", 
+                    try Parser.parseGenericStruct(@FieldType(T, "supertype_target"), instance, reader, allocator)
+                ),
+                inline 0x11, 0x12 => @unionInit(
+                    T, "type_parameter_bound_target", 
+                    try Parser.parseGenericStruct(@FieldType(T, "type_parameter_bound_target"), instance, reader, allocator)
+                ),
+                inline 0x13, 0x14, 0x15 => @unionInit(
+                    T, "empty_target", 
+                    try Parser.parseGenericStruct(@FieldType(T, "empty_target"), instance, reader, allocator)
+                ),
+                inline 0x16 => @unionInit(
+                    T, "formal_parameter_target", 
+                    try Parser.parseGenericStruct(@FieldType(T, "formal_parameter_target"), instance, reader, allocator)
+                ),
+                inline 0x17 => @unionInit(
+                    T, "throws_target", 
+                    try Parser.parseGenericStruct(@FieldType(T, "throws_target"), instance, reader, allocator)
+                ),
+                inline 0x40, 0x41 => @unionInit(
+                    T, "localvar_target", 
+                    try Parser.parseGenericStruct(@FieldType(T, "localvar_target"), instance, reader, allocator)
+                ),
+                inline 0x42 => @unionInit(
+                    T, "catch_target", 
+                    try Parser.parseGenericStruct(@FieldType(T, "catch_target"), instance, reader, allocator)
+                ),
+                inline 0x43, 0x44, 0x45, 0x46 => @unionInit(
+                    T, "offset_target", 
+                    try Parser.parseGenericStruct(@FieldType(T, "offset_target"), instance, reader, allocator)
+                ),
+                inline 0x47, 0x48, 0x4a, 0x4b => @unionInit(
+                    T, "type_argument_target", 
+                    try Parser.parseGenericStruct(@FieldType(T, "type_argument_target"), instance, reader, allocator)
+                ),
+                inline else => return Parser.MalformedError.InvalidEnumType,
+            };
+        }
     },
     target_path: type_path,
     type_index: u16,
@@ -498,9 +551,13 @@ pub const type_annotation = struct {
 pub const type_path = struct {
     path_length: u8,
     path: []struct {
-        type_path_kind: u8, // TODO ?
+        type_path_kind: u8, 
         type_argument_kind: u8,
     },
+
+    pub fn callback(T: type, _: anytype, comptime _: usize, i: *ClassFile, r: *Reader, a: Allocator) Parser.ParseError!T {
+        return try Parser.parseGenericStruct(T, i, r, a);
+    }
 };
 
 pub const annotation = struct {
@@ -530,7 +587,7 @@ pub const element_value = struct {
     },
     value: union(enum) {
         const_value_index: u16,
-        enum_info_index: struct {
+        enum_const_value: struct {
             type_name_index: u16,
             const_name_index: u16,
         },
@@ -540,6 +597,41 @@ pub const element_value = struct {
             num_values: u16,
             values: []element_value
         },
+
+        pub fn callback(
+            T: type,
+            parent: anytype,
+            comptime _: usize,
+            instance: *ClassFile,
+            reader: *Reader,
+            allocator: Allocator
+        ) Parser.ParseError!T {
+            return switch(parent.tag) {
+                inline .byte, .char, .double, 
+                .float, .int, .long, 
+                .short, .boolean, .String => @unionInit(
+                    T, "const_value_index", 
+                    try Parser.parseGenericStruct(@FieldType(T, "const_value_index"), instance, reader, allocator)
+                ),
+                inline .Enum => @unionInit(
+                    T, "enum_const_value", 
+                    try Parser.parseGenericStruct(@FieldType(T, "enum_const_value"), instance, reader, allocator)
+                ),
+                inline .Class => @unionInit(
+                    T, "class_info_index", 
+                    try Parser.parseGenericStruct(@FieldType(T, "class_info_index"), instance, reader, allocator)
+                ),
+                inline .Annotation => @unionInit(
+                    T, "annotation_value", 
+                    try Parser.parseGenericStruct(@FieldType(T, "annotation_value"), instance, reader, allocator)
+                ),
+                inline .Array => @unionInit(
+                    T, "array_value", 
+                    try Parser.parseGenericStruct(@FieldType(T, "array_value"), instance, reader, allocator)
+                ),
+                inline else => return Parser.MalformedError.InvalidEnumType,
+            };
+        }
     }
 };
 

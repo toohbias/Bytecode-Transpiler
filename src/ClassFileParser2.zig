@@ -24,27 +24,24 @@ pub fn parseGenericStruct(T: type, instance: *ClassFile, reader: *Reader, alloca
     switch(@typeInfo(T)) {
         .@"struct" => |s| {
             inline for(s.fields, 0..) |field, it| {
-                // std.debug.print("{s}\n", .{field.name});
                 const fieldtype = field.type;
                 @field(result, field.name) = switch(@typeInfo(fieldtype)) {
                     .int => reader.takeInt(field.type, .big) catch return InternalError.ReadFailed,
                     .float => |f| @as(fieldtype, @bitCast(reader.takeInt(@Type(
                         .{ .int = .{ .bits = f.bits, .signedness = .unsigned } }
                     ), .big) catch return InternalError.ReadFailed)),
-                    else => |t| ret: {
-                        switch(t) {
-                            .pointer => |p| switch(@typeInfo(p.child)) {
-                                .int, .float => break :ret try defaultArrCallback(fieldtype, result, it, instance, reader, allocator),
-                                else => if(@hasDecl(p.child, "callback")) {
-                                    break :ret try p.child.callback(fieldtype, result, it, instance, reader, allocator);
-                                } else break :ret try defaultArrCallback(fieldtype, result, it, instance, reader, allocator)
-                            },
-                            else => |e| if(@hasDecl(fieldtype, "callback")) {
-                                break :ret try fieldtype.callback(fieldtype, result, it, instance, reader, allocator);
-                            } else switch(e) {
-                                .@"enum" => break :ret try defaultEnumCallback(fieldtype, result, it, instance, reader, allocator),
-                                else => return InternalError.InvalidCallbackImpl,
-                            }
+                    .pointer => |p| ret: switch(@typeInfo(p.child)) {
+                        .int, .float => break :ret try defaultArrCallback(fieldtype, result, it, instance, reader, allocator),
+                        else => if(@hasDecl(p.child, "callback")) {
+                            break :ret try p.child.callback(fieldtype, result, it, instance, reader, allocator);
+                        } else break :ret try defaultArrCallback(fieldtype, result, it, instance, reader, allocator)
+                    },
+                    else => |e| ret: { 
+                        if(@hasDecl(fieldtype, "callback")) {
+                            break :ret try fieldtype.callback(fieldtype, result, it, instance, reader, allocator);
+                        } else switch(e) {
+                            .@"enum" => break :ret try defaultEnumCallback(fieldtype, result, it, instance, reader, allocator),
+                            else => return InternalError.InvalidCallbackImpl,
                         }
                     },
                 };
@@ -85,9 +82,5 @@ pub fn defaultArrCallback(
 }
 
 pub fn defaultEnumCallback(T: type, _: anytype, comptime _: usize, _: *ClassFile, reader: *Reader, _: Allocator) ParseError!T {
-
-    return std.meta.intToEnum(
-        T, 
-        reader.takeByte() catch return InternalError.ReadFailed
-    ) catch return MalformedError.InvalidEnumType;
+    return std.meta.intToEnum(T, reader.takeByte() catch return InternalError.ReadFailed) catch return MalformedError.InvalidEnumType;
 }
