@@ -1,8 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Reader = std.Io.Reader;
 const zip = @cImport(@cInclude("miniz.h"));
 
-const Parser = @import("ClassFileParser.zig");
 const ClassFile = @import("ClassFile.zig");
 const Validator = @import("ClassFileValidator.zig");
 
@@ -31,7 +31,6 @@ const Manifest = struct {
     @"Sealed": ?[]const u8 = null,
 };
 
-// TODO take path to main class
 pub fn readZip(allocator: Allocator, path: []const u8) !void {
     var archive: zip.mz_zip_archive = undefined;
     zip.mz_zip_zero_struct(&archive);
@@ -41,8 +40,6 @@ pub fn readZip(allocator: Allocator, path: []const u8) !void {
     const filename = try allocator.alloc(u8, 512);
     defer allocator.free(filename);
 
-    _ = try extractManifest(&archive, allocator);
-    
     for(0..zip.mz_zip_reader_get_num_files(&archive)) |index| {
         var stat: zip.mz_zip_archive_file_stat = undefined;
         if(zip.mz_zip_reader_file_stat(&archive, @intCast(index), &stat) != zip.MZ_TRUE) { @panic("stat failed!"); }
@@ -50,20 +47,16 @@ pub fn readZip(allocator: Allocator, path: []const u8) !void {
         if(stat.m_is_directory == zip.MZ_TRUE) { continue; }
 
         const filename_length = zip.mz_zip_reader_get_filename(&archive, @intCast(index), filename.ptr, @intCast(filename.len));
-        _ = zip.memset(filename.ptr, 0, filename.len);
-        if(std.mem.lastIndexOf(u8, filename, ".class")) |file_extension_index| {
-            if(filename_length - file_extension_index != 7) { continue; }
-        } else { continue; }
+        if(!std.mem.eql(u8, filename[filename_length - 7..filename_length-1], ".class")) continue;
 
         const buffer = try allocator.alloc(u8, stat.m_uncomp_size);
         defer allocator.free(buffer);
         if(zip.mz_zip_reader_extract_to_mem(&archive, @intCast(index), buffer.ptr, buffer.len, 0) != zip.MZ_TRUE) { @panic("couldn't extract archive!"); }
 
         var byteReader = std.Io.Reader.fixed(buffer);
-        var cf: ClassFile.ClassFile = undefined;
-        _ = try Parser.parseStruct(ClassFile.ClassFile, &cf, &byteReader, allocator);
+        var cf: ClassFile.ClassFile = try ClassFile.ClassFile.parse(&byteReader, allocator);
 
-        Validator.validate(&cf, &byteReader, .{});
+        Validator.validate(&cf, &byteReader, .{ .verbose = true });
 
         std.debug.print("Extracted {s} ({} bytes)\n", .{@as([*:0]const u8, @ptrCast(&stat.m_filename)), stat.m_uncomp_size});
     }
@@ -88,7 +81,7 @@ pub fn readJar(path: []const u8, classpath: ?[]const u8, allocator: Allocator) Z
     std.debug.print("{s}\n", .{filename});
 }
 
-pub fn extractManifest(archive: *zip.mz_zip_archive, allocator: Allocator) ZipError!?Manifest {
+fn extractManifest(archive: *zip.mz_zip_archive, allocator: Allocator) ZipError!?Manifest {
     const manifest_index = zip.mz_zip_reader_locate_file(archive, "META-INF/MANIFEST.MF", null, 0);
     if(manifest_index == -1) { return null; }
     
@@ -118,7 +111,19 @@ pub fn extractManifest(archive: *zip.mz_zip_archive, allocator: Allocator) ZipEr
             switch(val) { inline else => |v| {
                 @field(manifest, @tagName(v)) = line[split_index+2..];
             }}
+        // we can stop after the main attributes, the Main-Class attribute won't come after
+        // https://docs.oracle.com/en/java/javase/25/docs/specs/jar/jar.html#manifest-specification
         } else break :brk; 
     }
     return manifest;
+}
+
+pub fn getSourceReader(filePath: []const u8, allocator: Allocator) !Reader {
+    const source = try std.fs.cwd().openFile(filePath, .{});
+    defer source.close();
+
+    const stat = try source.stat();
+    const buffer: []u8 = source.readToEndAlloc(allocator, stat.size) catch @panic("ALLOC FAILED!\n");
+    
+    return std.Io.Reader.fixed(buffer);
 }

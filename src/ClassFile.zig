@@ -1,6 +1,10 @@
 const std = @import("std");
+const Reader = std.Io.Reader;
+const Allocator = std.mem.Allocator;
 
 const OpCode = @import("OpCode.zig").OpCode;
+
+const Parser = @import("ClassFileParser2.zig");
 
 pub const ClassFile = struct {
     magic: u32,
@@ -31,6 +35,12 @@ pub const ClassFile = struct {
         ACC_ENUM = 0x4000,
         ACC_MODULE = 0x8000,
     };
+
+    pub fn parse(reader: *Reader, allocator: Allocator) Parser.ParseError!ClassFile {
+        var cf: ClassFile = undefined;
+        _ =  try Parser.parseGenericStruct(ClassFile, &cf, reader, allocator);
+        return cf;
+    }
 };
 
 pub const cp_info = union(enum(u8)) {
@@ -105,6 +115,33 @@ pub const cp_info = union(enum(u8)) {
     Package: struct {
         name_index: u16,
     } = 20,
+
+    pub fn callback(
+        T: type, 
+        parent: anytype, 
+        comptime _: usize, 
+        instance: *ClassFile, 
+        reader: *Reader, 
+        allocator: Allocator
+    ) Parser.ParseError!T {
+    
+        const size = @field(parent, "constant_pool_count") - 1;
+        var result = allocator.alloc(cp_info, size) catch return Parser.InternalError.MemoryError;
+        for(0..size) |it| {
+            if(it != 0 and (result[it-1] == .Long or result[it-1] == .Double)) {
+                result[it] = cp_info{ .Empty = .{} };
+                continue;
+            } // "In retrospect, making 8-byte constants take two constant pool entries was a poor choice" -Java ClassFile Spec
+
+            const enumVariant = try Parser.defaultEnumCallback(@typeInfo(cp_info).@"union".tag_type.?, cp_info, 0, instance, reader, allocator);
+            switch(enumVariant) { inline else => |ev| {
+                const tagName = @tagName(ev);
+                const fieldType = @FieldType(cp_info, tagName);
+                result[it] = @unionInit(cp_info, tagName, try Parser.parseGenericStruct(fieldType, instance, reader, allocator));
+            }}
+        }
+        return result;
+    }
 };
 
 pub const field_info = struct {
@@ -161,8 +198,7 @@ pub const attribute_info = struct {
             max_stack: u16,
             max_locals: u16,
             code_length: u32,
-            code: []OpCode,     // I only know the byte size, not the amount of instructions
-            opcode_count: u32,  // store it here after
+            code: []OpCode,     // code.len is the number of instructions, code_length the number of bytes
             exception_table_length: u16,
             exception_table: []struct {
                 start_pc: u16,
@@ -215,7 +251,7 @@ pub const attribute_info = struct {
             sourcefile_index: u16,
         },
         SourceDebugExtension: struct {
-            debug_extension: []u8,
+            debug_extension: []u8, // TODO
         },
         LineNumberTable: struct {
             line_number_table_length: u16,
@@ -381,6 +417,25 @@ pub const attribute_info = struct {
         PermittedSubclasses: struct {
             number_of_classes: u16,
             classes: []u16,
+        },
+
+        pub fn callback(
+            T: type, 
+            parent: anytype, 
+            comptime _: usize, 
+            instance: *ClassFile,
+            reader: *Reader, 
+            allocator: Allocator
+        ) Parser.ParseError!T {
+
+            const attr_name = instance.*.constant_pool[parent.attribute_name_index - 1].Utf8.bytes;
+            const enumVariant = std.meta.stringToEnum(@typeInfo(@FieldType(attribute_info, "info")).@"union".tag_type.?, attr_name);
+            if(enumVariant) |e| {
+                switch(e) { inline else => |t| {
+                    const fieldType = @FieldType(T, @tagName(t));
+                    return @unionInit(T, @tagName(t), try Parser.parseGenericStruct(fieldType, instance, reader, allocator));
+                }}
+            } else return Parser.MalformedError.InvalidEnumType;
         }
     }
 };
@@ -498,19 +553,45 @@ pub const verification_type_info = union(enum(u8)) {
     UninitializedThis: struct {} = 6,
     Object: struct { cpool_index: u16, } = 7,
     Uninitialized: struct { offset: u16, } = 8,
+
+    pub fn callback(
+        T: type,
+        parent: anytype,
+        comptime field_index: usize,
+        instance: *ClassFile,
+        reader: *Reader,
+        allocator: Allocator
+    ) Parser.ParseError!T {
+        const size = switch(try stack_map_frame.frame_type(@field(parent, "frame_type"))) {
+            .same_locals_1_stack_item_frame, .same_locals_1_stack_item_frame_extended => 1,
+            .append_frame => @field(parent, "frame_type") - 251,
+            .full_frame => ret: {
+                if(field_index == 0) unreachable;
+                break :ret @field(parent, @typeInfo(@FieldType(stack_map_frame, "full_frame")).@"struct".fields[field_index-1].name);
+            },
+            else => unreachable,
+        };
+        var result = allocator.alloc(verification_type_info, size) catch return Parser.InternalError.MemoryError; 
+        for(0..size) |it| {
+            const enumVariant = try Parser.defaultEnumCallback(
+                @typeInfo(verification_type_info).@"union".tag_type.?, 
+                parent, field_index, instance, reader, allocator
+            );
+            switch(enumVariant) { inline else => |ev| {
+                const tagName = @tagName(ev);
+                const fieldType = @FieldType(verification_type_info, tagName);
+                result[it] = @unionInit(
+                    verification_type_info, 
+                    tagName, 
+                    try Parser.parseGenericStruct(fieldType, instance, reader, allocator)
+                );
+            }}
+        }
+        return result;
+    }
 };
 
-pub const stack_map_frame_enum = enum {
-    same_frame,
-    same_locals_1_stack_item_frame,
-    same_locals_1_stack_item_frame_extended,
-    chop_frame,
-    same_frame_extended,
-    append_frame,
-    full_frame,
-};
-
-pub const stack_map_frame = union(stack_map_frame_enum) {
+pub const stack_map_frame = union(enum) {
     same_frame: struct {
         frame_type: u8, // 0-63
     },
@@ -543,5 +624,44 @@ pub const stack_map_frame = union(stack_map_frame_enum) {
         locals: []verification_type_info,
         number_of_stack_items: u16,
         stack: []verification_type_info,
+    },
+
+    pub fn callback(
+        T: type, 
+        parent: anytype, 
+        comptime _ : usize, 
+        instance: *ClassFile,
+        reader: *Reader, 
+        allocator: Allocator
+    ) Parser.ParseError!T {
+        
+        const size = @field(parent, "number_of_entries");
+        var result = allocator.alloc(stack_map_frame, size) catch return Parser.InternalError.MemoryError;
+        for(0..size) |it| {
+            const enumVariant = try frame_type(reader.peekByte() catch return Parser.InternalError.ReadFailed);
+            switch(enumVariant) { inline else => |ev| {
+                const tagName = @tagName(ev);
+                const fieldType = @FieldType(stack_map_frame, tagName);
+                result[it] = @unionInit(
+                    stack_map_frame, 
+                    tagName, 
+                    try Parser.parseGenericStruct(fieldType, instance, reader, allocator)
+                );
+            }}
+        }
+        return result;
+    }
+
+    fn frame_type(kind: u8) Parser.ParseError!@typeInfo(stack_map_frame).@"union".tag_type.? {
+        return switch(kind) {
+            0...63    => .same_frame,
+            64...127  => .same_locals_1_stack_item_frame,
+            247       => .same_locals_1_stack_item_frame_extended,
+            248...250 => .chop_frame,
+            251       => .same_frame_extended,
+            252...254 => .append_frame,
+            255       => .full_frame,
+            else      => return Parser.MalformedError.InvalidEnumType,
+        };
     }
 };
