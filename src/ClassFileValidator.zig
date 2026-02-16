@@ -144,13 +144,15 @@ fn validateConstantPool(classFile: *ClassFile.ClassFile, options: LoggingOptions
             },
             .Utf8 => {},
             .MethodHandle => |v| {
-                const reference = @TypeOf(constant_pool[v.reference_index - 1]);
                 switch(v.reference_kind) {
                     // TODO 5, 6, 7, 9 must not be <init> or <clinit>       
                     .REF_getField, .REF_getStatic, .REF_putField, .REF_putStatic => {
-                        if(reference != @FieldType(cp_info, "Fieldref")) {
-                            log.err("failed constant pool validation: entry to MethodHandle is of type {} (should be Fieldref)", .{reference});
-                            return FormatError.InvalidConstantPool;
+                        switch(constant_pool[v.reference_index - 1]) {
+                            .Fieldref => {},
+                            else => |t| {
+                                log.err("failed constant pool validation: entry to MethodHandle is of type {} (should be Fieldref)", .{t});
+                                return FormatError.InvalidConstantPool;
+                            },
                         }
                     },
                     .REF_invokeVirtual, .REF_newInvokeSpecial => {

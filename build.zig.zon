@@ -1,6 +1,6 @@
 .{
     .name = .Bytecode_Transpiler,
-    .version = "0.0.0",
+    .version = "0.0.1",
     .fingerprint = 0xe6e8402ab795a9c8, 
     .minimum_zig_version = "0.15.2",
     .dependencies = .{

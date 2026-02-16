@@ -1,18 +1,30 @@
 const std = @import("std");
+const fs = std.fs;
 const Allocator = std.mem.Allocator;
 const Reader = std.Io.Reader;
 const zip = @cImport(@cInclude("miniz.h"));
 
 const ClassFile = @import("ClassFile.zig");
+const Parser = @import("ClassFileParser2.zig");
 const Validator = @import("ClassFileValidator.zig");
+
+const InternalError = error {
+    StatFailed,
+    MemoryError,
+} || Parser.ParseError;
 
 const ZipError = error {
     InitFailed,
-    StatFailed,
     ExtractionFailed,
     InvalidClassFilePath,
     IndexingFailed,
-};
+} || InternalError;
+
+const DirError = error {
+    OpeningFailed,
+} || InternalError;
+
+const VfsError = ZipError || DirError;
 
 const Manifest = struct {
     @"Manifest-Version": ?[]const u8 = null,
@@ -31,6 +43,10 @@ const Manifest = struct {
     @"Specification-Vendor": ?[]const u8 = null,
     @"Sealed": ?[]const u8 = null,
 };
+
+
+paths: std.StringHashMap(*const ClassFile.ClassFile),
+
 
 pub fn readZip(allocator: Allocator, path: []const u8) !void {
     var archive: zip.mz_zip_archive = undefined;
@@ -57,13 +73,13 @@ pub fn readZip(allocator: Allocator, path: []const u8) !void {
         var byteReader = std.Io.Reader.fixed(buffer);
         var cf: ClassFile.ClassFile = try ClassFile.ClassFile.parse(&byteReader, allocator);
 
-        Validator.validate(&cf, &byteReader, .{ .verbose = true });
+        Validator.validate(&cf, &byteReader, .{});
 
-        std.debug.print("Extracted {s} ({} bytes)\n", .{@as([*:0]const u8, @ptrCast(&stat.m_filename)), stat.m_uncomp_size});
+        // std.debug.print("Extracted {s} ({} bytes)\n", .{@as([*:0]const u8, @ptrCast(&stat.m_filename)), stat.m_uncomp_size});
     }
 }
 
-pub fn readJar(path: []const u8, classpath: ?[]const u8, allocator: Allocator) ZipError!void {
+pub fn readJar(path: []const u8, classpath: ?[]const u8, allocator: Allocator) ZipError!@This() {
     var archive: zip.mz_zip_archive = undefined;
     zip.mz_zip_zero_struct(&archive);
     if(zip.mz_zip_reader_init_file(&archive, path.ptr, 0) != zip.MZ_TRUE) { return ZipError.InitFailed; }
@@ -80,12 +96,38 @@ pub fn readJar(path: []const u8, classpath: ?[]const u8, allocator: Allocator) Z
     else return ZipError.InvalidClassFilePath;
 
     const root: ClassFile.ClassFile = try parseClassFromArchive(&archive, filename, allocator);
+
+    var vfs: @This() = .{ .paths = std.StringHashMap(*const ClassFile.ClassFile).init(allocator) };
+    vfs.paths.put(root.constant_pool[root.this_class].Utf8.bytes, &root) catch return InternalError.MemoryError;
+
+    // archive needs .class extension that is not present in classfile paths
+    var classfile_name = [_]u8{0} ** 128;
+    const dot_class = ".class";
+    for(dot_class, 121..) |c, it| {
+        classfile_name[it] = c;
+    }
     
     for(root.constant_pool) |pool| {
-        if(std.meta.activeTag(pool) == .Class) {
-            std.debug.print("Class: {s}\n", .{root.constant_pool[pool.Class.name_index - 1].Utf8.bytes});
+        if(std.meta.activeTag(pool) != .Class) continue; 
+
+        const class = root.constant_pool[pool.Class.name_index - 1].Utf8.bytes;
+        if(!vfs.paths.contains(class)) {
+            const class_slice = classfile_name[121-class.len..];
+            std.mem.copyForwards(u8, class_slice, class);
+            const dep = parseClassFromArchive(&archive, class_slice, allocator)
+                catch |err| switch(err) { 
+                    ZipError.IndexingFailed => {
+                        std.debug.print("warning: {s} not found in archive!\n", .{class_slice});
+                        continue;
+                    },
+                    else => |e| return e,
+                };
+            std.debug.print("added {s}\n", .{class});
+            vfs.paths.put(class, &dep) catch return InternalError.MemoryError;
         }
     }
+
+    return vfs;
 }
 
 pub fn parseClassFromArchive(archive: *zip.mz_zip_archive, name: []const u8, allocator: Allocator) ZipError!ClassFile.ClassFile {
@@ -95,7 +137,7 @@ pub fn parseClassFromArchive(archive: *zip.mz_zip_archive, name: []const u8, all
     var stat: zip.mz_zip_archive_file_stat = undefined;
     if(zip.mz_zip_reader_file_stat(archive, @intCast(file_index), &stat) != zip.MZ_TRUE) return ZipError.StatFailed;
 
-    const buffer = allocator.alloc(u8, stat.m_uncomp_size) catch unreachable;
+    const buffer = allocator.alloc(u8, stat.m_uncomp_size) catch return InternalError.MemoryError;
     if(zip.mz_zip_reader_extract_to_mem(
         archive, 
         @intCast(file_index), 
@@ -105,7 +147,20 @@ pub fn parseClassFromArchive(archive: *zip.mz_zip_archive, name: []const u8, all
     ) != zip.MZ_TRUE) return ZipError.ExtractionFailed;
 
     var reader = std.Io.Reader.fixed(buffer);
-    var result = ClassFile.ClassFile.parse(&reader, allocator) catch unreachable;
+    var result = try ClassFile.ClassFile.parse(&reader, allocator);
+    Validator.validate(&result, &reader, .{});
+    return result;
+}
+
+pub fn parseClassFromDir(dir: fs.Dir, name: []const u8, allocator: Allocator) DirError!ClassFile.ClassFile {
+    const source = dir.openFile(name, .{}) catch return DirError.OpeningFailed;
+    defer source.close();
+    
+    const stat = source.stat() catch return DirError.StatFailed;
+    const buffer: []u8 = source.readToEndAlloc(allocator, stat.size) catch return InternalError.MemoryError;
+
+    var reader = std.Io.Reader.fixed(buffer);
+    var result = try ClassFile.ClassFile.parse(&reader, allocator);
     Validator.validate(&result, &reader, .{});
     return result;
 }
@@ -145,14 +200,4 @@ fn extractManifest(archive: *zip.mz_zip_archive, allocator: Allocator) ZipError!
         } else break :brk; 
     }
     return manifest;
-}
-
-pub fn getSourceReader(filePath: []const u8, allocator: Allocator) !Reader {
-    const source = try std.fs.cwd().openFile(filePath, .{});
-    defer source.close();
-
-    const stat = try source.stat();
-    const buffer: []u8 = source.readToEndAlloc(allocator, stat.size) catch @panic("ALLOC FAILED!\n");
-    
-    return std.Io.Reader.fixed(buffer);
 }

@@ -273,7 +273,17 @@ pub const OpCode = union(enum(u8)) {
     wide: struct { 
         union(enum(u8)) {
             iinc: struct { u16, i16 } = 0x84,
-            _: struct { u16 },
+            iload: struct { u16 } = 0x15,
+            fload: struct { u16 } = 0x17,
+            aload: struct { u16 } = 0x19,
+            lload: struct { u16 } = 0x16,
+            dload: struct { u16 } = 0x18,
+            istore: struct { u16 } = 0x36,
+            fstore: struct { u16 } = 0x38,
+            astore: struct { u16 } = 0x3a,
+            lstore: struct { u16 } = 0x37,
+            dstore: struct { u16 } = 0x39,
+            ret: struct { u16 } = 0xa9,
         }
     } = 0xc4,
     multianewarray: struct { u16, u8 } = 0xc5,

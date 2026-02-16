@@ -629,8 +629,15 @@ pub const element_value = struct {
                     T, "array_value", 
                     try Parser.parseGenericStruct(@FieldType(T, "array_value"), instance, reader, allocator)
                 ),
-                inline else => return Parser.MalformedError.InvalidEnumType,
             };
+        }
+    },
+
+    pub fn callback(T: type, p: anytype, comptime f_i: usize, i: *ClassFile, r: *Reader, a: Allocator) Parser.ParseError!T {
+        switch (@typeInfo(T)) {
+            .pointer => return try Parser.defaultArrCallback(T, p, f_i, i, r, a),
+            .@"struct" => return try Parser.parseGenericStruct(T, i, r, a),
+            else => unreachable,
         }
     }
 };

@@ -11,11 +11,7 @@ test "does it parse" {
     const allocator = arenaAllocator.allocator();
     defer arenaAllocator.deinit();
 
-    var reader = try VFS.getSourceReader("/home/tobi/doc/projects/casino/out/production/casino/src/View_GUI/CasinoView.class", allocator);
-
-    var cf: ClassFile.ClassFile = try ClassFile.ClassFile.parse(&reader, allocator);
-
-    Validator.validate(&cf, &reader, .{});
+    const cf = try VFS.parseClassFromDir(std.fs.cwd(), "/home/tobi/doc/projects/casino/out/production/casino/src/View_GUI/CasinoView.class", allocator);
 
     var buffer: [4096]u8 = undefined;
     var file = try std.fs.cwd().createFile("output.json", .{});
@@ -31,13 +27,13 @@ test "zip" {
     const allocator = arenaAllocator.allocator();
     defer arenaAllocator.deinit();
      
-    // try VFS.readZip(allocator, "/home/tobi/dld/client/client.jar");
+    try VFS.readZip(allocator, "/home/tobi/dld/client/client.jar");
     // try VFS.readZip(allocator, "/home/tobi/doc/ghidra/support/LaunchSupport.jar");
-    try VFS.readJar("/home/tobi/dld/client/client.jar", "net/minecraft/client/main/Main.class", allocator);
+    // _ = try VFS.readJar("/home/tobi/dld/client/client.jar", "net/minecraft/client/main/Main.class", allocator);
     // try VFS.readJar("/home/tobi/doc/ghidra/support/LaunchSupport.jar", "LaunchSupport.class", allocator);
 }
 
-pub fn printClassFile(classFile: *ClassFile.ClassFile, writer: *std.Io.Writer) !void {
+pub fn printClassFile(classFile: *const ClassFile.ClassFile, writer: *std.Io.Writer) !void {
     @setEvalBranchQuota(500000);
     try std.json.Stringify.value(classFile.*, .{ .whitespace = .indent_2}, writer);
     try writer.flush();
