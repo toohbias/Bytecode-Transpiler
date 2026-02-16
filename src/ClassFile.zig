@@ -4,7 +4,7 @@ const Allocator = std.mem.Allocator;
 
 const OpCode = @import("OpCode.zig").OpCode;
 
-const Parser = @import("ClassFileParser2.zig");
+const Parser = @import("ClassFileParser.zig");
 
 pub const ClassFile = struct {
     magic: u32,

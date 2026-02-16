@@ -2,23 +2,20 @@ const std = @import("std");
 const fs = std.fs;
 const Allocator = std.mem.Allocator;
 const Reader = std.Io.Reader;
-const zip = @cImport(@cInclude("miniz.h"));
 
-const ClassFile = @import("ClassFile.zig");
-const Parser = @import("ClassFileParser2.zig");
+const ClassFile = @import("ClassFile.zig").ClassFile;
+const Parser = @import("ClassFileParser.zig");
 const Validator = @import("ClassFileValidator.zig");
+
+const zip = @import("ZipHelper.zig");
+const Archive = zip.Archive;
 
 const InternalError = error {
     StatFailed,
     MemoryError,
 } || Parser.ParseError;
 
-const ZipError = error {
-    InitFailed,
-    ExtractionFailed,
-    InvalidClassFilePath,
-    IndexingFailed,
-} || InternalError;
+const ZipError = zip.ZipError;
 
 const DirError = error {
     OpeningFailed,
@@ -45,47 +42,31 @@ const Manifest = struct {
 };
 
 
-paths: std.StringHashMap(*const ClassFile.ClassFile),
+paths: std.StringHashMap(*const ClassFile),
 
 
 pub fn readZip(allocator: Allocator, path: []const u8) !void {
-    var archive: zip.mz_zip_archive = undefined;
-    zip.mz_zip_zero_struct(&archive);
-    if(zip.mz_zip_reader_init_file(&archive, path.ptr, 0) != zip.MZ_TRUE) { @panic("couldn't init archive!"); }
-    defer _ = zip.mz_zip_reader_end(&archive);
+    var archive = try Archive.init(path, allocator);
+    defer archive.deinit();
 
-    const filename = try allocator.alloc(u8, 512);
-    defer allocator.free(filename);
-
-    for(0..zip.mz_zip_reader_get_num_files(&archive)) |index| {
-        var stat: zip.mz_zip_archive_file_stat = undefined;
-        if(zip.mz_zip_reader_file_stat(&archive, @intCast(index), &stat) != zip.MZ_TRUE) { @panic("stat failed!"); }
-
-        if(stat.m_is_directory == zip.MZ_TRUE) { continue; }
-
-        const filename_length = zip.mz_zip_reader_get_filename(&archive, @intCast(index), filename.ptr, @intCast(filename.len));
-        if(!std.mem.eql(u8, filename[filename_length - 7..filename_length-1], ".class")) continue;
-
-        const buffer = try allocator.alloc(u8, stat.m_uncomp_size);
-        defer allocator.free(buffer);
-        if(zip.mz_zip_reader_extract_to_mem(&archive, @intCast(index), buffer.ptr, buffer.len, 0) != zip.MZ_TRUE) { @panic("couldn't extract archive!"); }
-
-        var byteReader = std.Io.Reader.fixed(buffer);
-        var cf: ClassFile.ClassFile = try ClassFile.ClassFile.parse(&byteReader, allocator);
-
-        Validator.validate(&cf, &byteReader, .{});
-
-        // std.debug.print("Extracted {s} ({} bytes)\n", .{@as([*:0]const u8, @ptrCast(&stat.m_filename)), stat.m_uncomp_size});
+    for(0..archive.fileCount()) |index| {
+        var elem = try archive.getElementByIndex(index);
+        defer elem.deinit();
+    
+        if(elem.isDir()) continue;
+        if(!std.mem.eql(u8, elem.getFilename()[elem.name_len-7..elem.name_len-1], ".class")) continue;
+    
+        var reader = std.Io.Reader.fixed(elem.getContent());
+        var cf = try ClassFile.parse(&reader, allocator);
+        Validator.validate(&cf, &reader, .{});
     }
 }
 
-pub fn readJar(path: []const u8, classpath: ?[]const u8, allocator: Allocator) ZipError!@This() {
-    var archive: zip.mz_zip_archive = undefined;
-    zip.mz_zip_zero_struct(&archive);
-    if(zip.mz_zip_reader_init_file(&archive, path.ptr, 0) != zip.MZ_TRUE) { return ZipError.InitFailed; }
-    defer _ = zip.mz_zip_reader_end(&archive);
+pub fn readJar(path: []const u8, classpath: ?[]const u8, allocator: Allocator) !@This() {
+    var archive = try Archive.init(path, allocator);
+    defer archive.deinit();
 
-    const manifest: ?Manifest = try extractManifest(&archive, allocator);
+    const manifest: ?Manifest = try extractManifest(&archive);
     
     const filename: []const u8 = if(classpath) |ext_path| 
         ext_path 
@@ -95,9 +76,9 @@ pub fn readJar(path: []const u8, classpath: ?[]const u8, allocator: Allocator) Z
         else return ZipError.InvalidClassFilePath
     else return ZipError.InvalidClassFilePath;
 
-    const root: ClassFile.ClassFile = try parseClassFromArchive(&archive, filename, allocator);
+    const root = try parseClassFromArchive(&archive, filename);
 
-    var vfs: @This() = .{ .paths = std.StringHashMap(*const ClassFile.ClassFile).init(allocator) };
+    var vfs: @This() = .{ .paths = std.StringHashMap(*const ClassFile).init(allocator) };
     vfs.paths.put(root.constant_pool[root.this_class].Utf8.bytes, &root) catch return InternalError.MemoryError;
 
     // archive needs .class extension that is not present in classfile paths
@@ -106,7 +87,7 @@ pub fn readJar(path: []const u8, classpath: ?[]const u8, allocator: Allocator) Z
     for(dot_class, 121..) |c, it| {
         classfile_name[it] = c;
     }
-    
+
     for(root.constant_pool) |pool| {
         if(std.meta.activeTag(pool) != .Class) continue; 
 
@@ -114,9 +95,9 @@ pub fn readJar(path: []const u8, classpath: ?[]const u8, allocator: Allocator) Z
         if(!vfs.paths.contains(class)) {
             const class_slice = classfile_name[121-class.len..];
             std.mem.copyForwards(u8, class_slice, class);
-            const dep = parseClassFromArchive(&archive, class_slice, allocator)
+            const dep = parseClassFromArchive(&archive, class_slice)
                 catch |err| switch(err) { 
-                    ZipError.IndexingFailed => {
+                    ZipError.InvalidFileName => {
                         std.debug.print("warning: {s} not found in archive!\n", .{class_slice});
                         continue;
                     },
@@ -130,29 +111,16 @@ pub fn readJar(path: []const u8, classpath: ?[]const u8, allocator: Allocator) Z
     return vfs;
 }
 
-pub fn parseClassFromArchive(archive: *zip.mz_zip_archive, name: []const u8, allocator: Allocator) ZipError!ClassFile.ClassFile {
-    const file_index = zip.mz_zip_reader_locate_file(archive, name.ptr, null, 0);
-    if(file_index == -1) return ZipError.IndexingFailed;
+pub fn parseClassFromArchive(archive: *Archive, name: []const u8) !ClassFile {
+    var file = try archive.getElementByName(name);
 
-    var stat: zip.mz_zip_archive_file_stat = undefined;
-    if(zip.mz_zip_reader_file_stat(archive, @intCast(file_index), &stat) != zip.MZ_TRUE) return ZipError.StatFailed;
-
-    const buffer = allocator.alloc(u8, stat.m_uncomp_size) catch return InternalError.MemoryError;
-    if(zip.mz_zip_reader_extract_to_mem(
-        archive, 
-        @intCast(file_index), 
-        buffer.ptr, 
-        buffer.len, 
-        0
-    ) != zip.MZ_TRUE) return ZipError.ExtractionFailed;
-
-    var reader = std.Io.Reader.fixed(buffer);
-    var result = try ClassFile.ClassFile.parse(&reader, allocator);
+    var reader = std.Io.Reader.fixed(file.getContent());
+    var result = try ClassFile.parse(&reader, archive.allocator);
     Validator.validate(&result, &reader, .{});
     return result;
 }
 
-pub fn parseClassFromDir(dir: fs.Dir, name: []const u8, allocator: Allocator) DirError!ClassFile.ClassFile {
+pub fn parseClassFromDir(dir: fs.Dir, name: []const u8, allocator: Allocator) DirError!ClassFile {
     const source = dir.openFile(name, .{}) catch return DirError.OpeningFailed;
     defer source.close();
     
@@ -160,36 +128,23 @@ pub fn parseClassFromDir(dir: fs.Dir, name: []const u8, allocator: Allocator) Di
     const buffer: []u8 = source.readToEndAlloc(allocator, stat.size) catch return InternalError.MemoryError;
 
     var reader = std.Io.Reader.fixed(buffer);
-    var result = try ClassFile.ClassFile.parse(&reader, allocator);
+    var result = try ClassFile.parse(&reader, allocator);
     Validator.validate(&result, &reader, .{});
     return result;
 }
 
-fn extractManifest(archive: *zip.mz_zip_archive, allocator: Allocator) ZipError!?Manifest {
-    const manifest_index = zip.mz_zip_reader_locate_file(archive, "META-INF/MANIFEST.MF", null, 0);
-    if(manifest_index == -1) { return null; }
-    
-    var manifest_stat: zip.mz_zip_archive_file_stat = undefined;
-    if(zip.mz_zip_reader_file_stat(
-        archive, 
-        @intCast(manifest_index), 
-        &manifest_stat
-    ) != zip.MZ_TRUE) return ZipError.StatFailed; 
-
-    const manifest_buffer = allocator.alloc(u8, manifest_stat.m_uncomp_size) catch unreachable;
-    if(zip.mz_zip_reader_extract_to_mem(
-        archive, 
-        @intCast(manifest_index), 
-        manifest_buffer.ptr, 
-        manifest_buffer.len, 
-        0
-    ) != zip.MZ_TRUE) return ZipError.ExtractionFailed; 
+fn extractManifest(archive: *Archive) !?Manifest {
+    const name: []const u8 = "META-INF/MANIFEST.MF";
+    var manifest_elem = archive.getElementByName(name) catch |err| switch(err) {
+        ZipError.InvalidFileName => return null,
+        else => return err,
+    };
 
     const manifest_enum = std.meta.FieldEnum(Manifest);
     var manifest: Manifest = .{};
-    
-    var iter = std.mem.splitScalar(u8, manifest_buffer, '\n');
-    brk: while(iter.next()) |line| {
+
+    var iter = std.mem.splitScalar(u8, manifest_elem.getContent(), '\n');
+    while(iter.next()) |line| {
         const split_index = if(std.mem.indexOf(u8, line, ": ")) |index| index else continue;
         if(std.meta.stringToEnum(manifest_enum, line[0..split_index])) |val| {
             switch(val) { inline else => |v| {
@@ -197,7 +152,7 @@ fn extractManifest(archive: *zip.mz_zip_archive, allocator: Allocator) ZipError!
             }}
         // we can stop after the main attributes, the Main-Class attribute won't come after
         // https://docs.oracle.com/en/java/javase/25/docs/specs/jar/jar.html#manifest-specification
-        } else break :brk; 
+        } else break;
     }
     return manifest;
 }

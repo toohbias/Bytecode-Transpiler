@@ -28,9 +28,9 @@ test "zip" {
     defer arenaAllocator.deinit();
      
     try VFS.readZip(allocator, "/home/tobi/dld/client/client.jar");
-    // try VFS.readZip(allocator, "/home/tobi/doc/ghidra/support/LaunchSupport.jar");
-    // _ = try VFS.readJar("/home/tobi/dld/client/client.jar", "net/minecraft/client/main/Main.class", allocator);
-    // try VFS.readJar("/home/tobi/doc/ghidra/support/LaunchSupport.jar", "LaunchSupport.class", allocator);
+    try VFS.readZip(allocator, "/home/tobi/doc/ghidra/support/LaunchSupport.jar");
+    _ = try VFS.readJar("/home/tobi/dld/client/client.jar", "net/minecraft/client/main/Main.class", allocator);
+    _ = try VFS.readJar("/home/tobi/doc/ghidra/support/LaunchSupport.jar", "LaunchSupport.class", allocator);
 }
 
 pub fn printClassFile(classFile: *const ClassFile.ClassFile, writer: *std.Io.Writer) !void {

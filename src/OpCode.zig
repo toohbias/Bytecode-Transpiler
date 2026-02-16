@@ -2,7 +2,7 @@ const std = @import("std");
 const Reader = std.Io.Reader;
 const Allocator = std.mem.Allocator;
 
-const Parser = @import("ClassFileParser2.zig");
+const Parser = @import("ClassFileParser.zig");
 
 const ClassFile = @import("ClassFile.zig").ClassFile;
 

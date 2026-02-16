@@ -15,46 +15,51 @@ const FormatError = error {
 
 // ClassFile Spec 4.8
 pub fn validate(classFile: *ClassFile.ClassFile, reader: *std.Io.Reader, options: LoggingOptions) void {
-    validateMagic(classFile.magic, options) catch unreachable;
+    const class_name = classFile.constant_pool[
+        classFile.constant_pool[
+            classFile.this_class-1
+        ].Class.name_index-1
+    ].Utf8.bytes;
+    validateMagic(classFile.magic, class_name, options) catch unreachable;
     // I suppose attributes have the right length otherwise it wouldn't parse correctly? TODO
-    validateReader(reader, options) catch unreachable;
-    validateConstantPool(classFile, options) catch unreachable;
+    validateReader(reader, class_name, options) catch unreachable;
+    validateConstantPool(classFile, class_name, options) catch unreachable;
     // TODO still need to check field/methodrefs for valid names/classes/descriptors
 }
 
-fn validateMagic(magic: u32, options: LoggingOptions) FormatError!void {
+fn validateMagic(magic: u32, class_name: []u8, options: LoggingOptions) FormatError!void {
     if(magic != 0xcafebabe) {
-        log.err("failed magic validation", .{});
+        log.err("{s} failed magic validation", .{class_name});
         return FormatError.InvalidMagic;
     }
-    if(options.verbose) log.info("passed magic validation", .{});
+    if(options.verbose) log.info("{s} passed magic validation", .{class_name});
 }
 
-fn validateReader(reader: *std.Io.Reader, options: LoggingOptions) FormatError!void {
+fn validateReader(reader: *std.Io.Reader, class_name: []u8, options: LoggingOptions) FormatError!void {
     if(reader.discardRemaining() catch unreachable != 0) {
-        log.err("failed file length validation", .{});
+        log.err("{s} failed file length validation", .{class_name});
         return FormatError.InvalidFileLength;
     }
-    if(options.verbose) log.info("passed file length validation", .{});
+    if(options.verbose) log.info("{s} passed file length validation", .{class_name});
 }
 
-fn validateConstantPool(classFile: *ClassFile.ClassFile, options: LoggingOptions) FormatError!void {
+fn validateConstantPool(classFile: *ClassFile.ClassFile, class_name: []u8, options: LoggingOptions) FormatError!void {
     const constant_pool = classFile.constant_pool;
-    const bootstrap_type: type = @FieldType(@FieldType(ClassFile.attribute_info, "info"), "BootstrapMethods");
-    var bootstrap_methods: bootstrap_type = undefined;
+    var bootstrap_method_count: u16 = 0;
     for(classFile.attributes) |a| {
-        if(@TypeOf(a) == bootstrap_type) {
-            bootstrap_methods = a;
+        if(std.meta.activeTag(a.info) == .BootstrapMethods) {
+            bootstrap_method_count = a.info.BootstrapMethods.num_bootstrap_methods;
             break;
         }
     }
     for(constant_pool) |e| {
+        // std.debug.print("{}\n", .{e});
         switch (e) {
             .Class => |v| {
                 switch(constant_pool[v.name_index - 1]) {
                     .Utf8 => {},
                     else => |t| {
-                        log.err("failed constant pool validation: entry to Class is of type {} (should be Utf8)", .{t});
+                        log.err("{s} failed constant pool validation: entry to Class is of type {} (should be Utf8)", .{class_name, t});
                         return FormatError.InvalidConstantPool;
                     },
                 }
@@ -64,14 +69,14 @@ fn validateConstantPool(classFile: *ClassFile.ClassFile, options: LoggingOptions
                 switch(constant_pool[v.class_index - 1]) {
                     .Class => {},
                     else => |t| {
-                        log.err("failed constant pool validation: entry to Fieldref is of type {} (should be Class)", .{t});
+                        log.err("{s} failed constant pool validation: entry to Fieldref is of type {} (should be Class)", .{class_name, t});
                         return FormatError.InvalidConstantPool;
                     },
                 }
                 switch(constant_pool[v.name_and_type_index - 1]) {
                     .NameAndType => {},
                     else => |t| {
-                        log.err("failed constant pool validation: entry to Fieldref is of type {} (should be NameAndType)", .{t});
+                        log.err("{s} failed constant pool validation: entry to Fieldref is of type {} (should be NameAndType)", .{class_name, t});
                         return FormatError.InvalidConstantPool;
                     },
                 }
@@ -82,14 +87,14 @@ fn validateConstantPool(classFile: *ClassFile.ClassFile, options: LoggingOptions
                     // TODO distinguish class and interface types at link time
                     .Class => {},
                     else => |t| {
-                        log.err("failed constant pool validation: entry to Methodref is of type {} (should be Class)", .{t});
+                        log.err("{s} failed constant pool validation: entry to Methodref is of type {} (should be Class)", .{class_name, t});
                         return FormatError.InvalidConstantPool;
                     },
                 }
                 switch(constant_pool[v.name_and_type_index - 1]) {
                     .NameAndType => {},
                     else => |t| {
-                        log.err("failed constant pool validation: entry to Methodref is of type {} (should be NameAndType)", .{t});
+                        log.err("{s} failed constant pool validation: entry to Methodref is of type {} (should be NameAndType)", .{class_name, t});
                         return FormatError.InvalidConstantPool;
                     },
                 }
@@ -99,14 +104,14 @@ fn validateConstantPool(classFile: *ClassFile.ClassFile, options: LoggingOptions
                 switch(constant_pool[v.class_index - 1]) {
                     .Class => {},
                     else => |t| {
-                        log.err("failed constant pool validation: entry to InterfaceMethodref is of type {} (should be Class)", .{t});
+                        log.err("{s} failed constant pool validation: entry to InterfaceMethodref is of type {} (should be Class)", .{class_name, t});
                         return FormatError.InvalidConstantPool;
                     },
                 }
                 switch(constant_pool[v.name_and_type_index - 1]) {
                     .NameAndType => {},
                     else => |t| {
-                        log.err("failed constant pool validation: entry to InterfaceMethodref is of type {} (should be NameAndType)", .{t});
+                        log.err("{s} failed constant pool validation: entry to InterfaceMethodref is of type {} (should be NameAndType)", .{class_name, t});
                         return FormatError.InvalidConstantPool;
                     },
                 }
@@ -115,7 +120,7 @@ fn validateConstantPool(classFile: *ClassFile.ClassFile, options: LoggingOptions
                 switch(constant_pool[v.string_index - 1]) {
                     .Utf8 => {},
                     else => |t| {
-                        log.err("failed constant pool validation: entry to String is of type {} (should be Utf8)", .{t});
+                        log.err("{s} failed constant pool validation: entry to String is of type {} (should be Utf8)", .{class_name, t});
                         return FormatError.InvalidConstantPool;
                     },
                 }
@@ -129,7 +134,7 @@ fn validateConstantPool(classFile: *ClassFile.ClassFile, options: LoggingOptions
                 switch(constant_pool[v.name_index - 1]) {
                     .Utf8 => {},
                     else => |t| {
-                        log.err("failed constant pool validation: entry to NameAndType is of type {} (should be Utf8)", .{t});
+                        log.err("{s} failed constant pool validation: entry to NameAndType is of type {} (should be Utf8)", .{class_name, t});
                         return FormatError.InvalidConstantPool;
                     },
                 }
@@ -137,7 +142,7 @@ fn validateConstantPool(classFile: *ClassFile.ClassFile, options: LoggingOptions
                 switch(constant_pool[v.descriptor_index - 1]) {
                     .Utf8 => {},
                     else => |t| {
-                        log.err("failed constant pool validation: entry to NameAndType is of type {} (should be Utf8)", .{t});
+                        log.err("{s} failed constant pool validation: entry to NameAndType is of type {} (should be Utf8)", .{class_name, t});
                         return FormatError.InvalidConstantPool;
                     },
                 }
@@ -150,7 +155,7 @@ fn validateConstantPool(classFile: *ClassFile.ClassFile, options: LoggingOptions
                         switch(constant_pool[v.reference_index - 1]) {
                             .Fieldref => {},
                             else => |t| {
-                                log.err("failed constant pool validation: entry to MethodHandle is of type {} (should be Fieldref)", .{t});
+                                log.err("{s} failed constant pool validation: entry to MethodHandle is of type {} (should be Fieldref)", .{class_name, t});
                                 return FormatError.InvalidConstantPool;
                             },
                         }
@@ -160,7 +165,7 @@ fn validateConstantPool(classFile: *ClassFile.ClassFile, options: LoggingOptions
                         switch(constant_pool[v.reference_index - 1]) {
                             .Methodref => {},
                             else => |t| {
-                                log.err("failed constant pool validation: entry to MethodHandle is of type {} (should be Methodref)", .{t});
+                                log.err("{s} failed constant pool validation: entry to MethodHandle is of type {} (should be Methodref)", .{class_name, t});
                                 return FormatError.InvalidConstantPool;
                             },
                         }
@@ -170,7 +175,7 @@ fn validateConstantPool(classFile: *ClassFile.ClassFile, options: LoggingOptions
                             .Methodref => {},
                             .InterfaceMethodref => {},
                             else => |t| {
-                                log.err("failed constant pool validation: entry to MethodHandle is of type {} (should be Methodref or InterfaceMethodref)", .{t});
+                                log.err("{s} failed constant pool validation: entry to MethodHandle is of type {} (should be Methodref or InterfaceMethodref)", .{class_name, t});
                                 return FormatError.InvalidConstantPool;
                             },
                         }
@@ -179,7 +184,7 @@ fn validateConstantPool(classFile: *ClassFile.ClassFile, options: LoggingOptions
                         switch(constant_pool[v.reference_index - 1]) {
                             .InterfaceMethodref => {},
                             else => |t| {
-                                log.err("failed constant pool validation: entry to MethodHandle is of type {} (should be InterfaceMethodref)", .{t});
+                                log.err("{s} failed constant pool validation: entry to MethodHandle is of type {} (should be InterfaceMethodref)", .{class_name, t});
                                 return FormatError.InvalidConstantPool;
                             },
                         }
@@ -190,33 +195,33 @@ fn validateConstantPool(classFile: *ClassFile.ClassFile, options: LoggingOptions
                 switch(constant_pool[v.descriptor_index - 1]) {
                     .Utf8 => {},
                     else => |t| {
-                        log.err("failed constant pool validation: entry to MethodType is of type {} (should be Utf8)", .{t});
+                        log.err("{s} failed constant pool validation: entry to MethodType is of type {} (should be Utf8)", .{class_name, t});
                         return FormatError.InvalidConstantPool;
                     },
                 }
             },
             .Dynamic => |v| {
-                if(v.bootstrap_method_attr_index >= bootstrap_methods.num_bootstrap_methods) {
-                    log.err("failed constant pool validation: entry to Dynamic is out of bounds of the bootstrap_methods table", .{});
+                if(v.bootstrap_method_attr_index >= bootstrap_method_count) {
+                    log.err("{s} failed constant pool validation: entry to Dynamic is out of bounds of the bootstrap_methods table", .{class_name});
                     return FormatError.InvalidConstantPool;
                 }
                 switch(constant_pool[v.name_and_type_index - 1]) {
                     .NameAndType => {},
                     else => |t| {
-                        log.err("failed constant pool validation: entry to Dynamic is of type {} (should be NameAndType)", .{t});
+                        log.err("{s} failed constant pool validation: entry to Dynamic is of type {} (should be NameAndType)", .{class_name, t});
                         return FormatError.InvalidConstantPool;
                     },
                 }
             },
             .InvokeDynamic => |v| {
-                if(v.bootstrap_method_attr_index >= bootstrap_methods.num_bootstrap_methods) {
-                    log.err("failed constant pool validation: entry to InvokeDynamicis out of bounds of the bootstrap_methods table", .{});
+                if(v.bootstrap_method_attr_index >= bootstrap_method_count) {
+                    log.err("{s} failed constant pool validation: entry to InvokeDynamic is out of bounds of the bootstrap_methods table", .{class_name});
                     return FormatError.InvalidConstantPool;
                 }
                 switch(constant_pool[v.name_and_type_index - 1]) {
                     .NameAndType => {},
                     else => |t| {
-                        log.err("failed constant pool validation: entry to InvokeDynamic is of type {} (should be NameAndType)", .{t});
+                        log.err("{s} failed constant pool validation: entry to InvokeDynamic is of type {} (should be NameAndType)", .{class_name, t});
                         return FormatError.InvalidConstantPool;
                     },
                 }
@@ -225,7 +230,7 @@ fn validateConstantPool(classFile: *ClassFile.ClassFile, options: LoggingOptions
                 switch(constant_pool[v.name_index - 1]) {
                     .Utf8 => {},
                     else => |t| {
-                        log.err("failed constant pool validation: entry to Module is of type {} (should be Utf8)", .{t});
+                        log.err("{s} failed constant pool validation: entry to Module is of type {} (should be Utf8)", .{class_name, t});
                         return FormatError.InvalidConstantPool;
                     },
                 }
@@ -234,7 +239,7 @@ fn validateConstantPool(classFile: *ClassFile.ClassFile, options: LoggingOptions
                 switch(constant_pool[v.name_index - 1]) {
                     .Utf8 => {},
                     else => |t| {
-                        log.err("failed constant pool validation: entry to Package is of type {} (should be Utf8)", .{t});
+                        log.err("{s} failed constant pool validation: entry to Package is of type {} (should be Utf8)", .{class_name, t});
                         return FormatError.InvalidConstantPool;
                     },
                 }
@@ -242,5 +247,5 @@ fn validateConstantPool(classFile: *ClassFile.ClassFile, options: LoggingOptions
             .Empty => {},
         }
     }
-    if(options.verbose) log.info("passed constant pool validation", .{});
+    if(options.verbose) log.info("{s} passed constant pool validation", .{class_name});
 }
