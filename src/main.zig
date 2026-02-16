@@ -27,10 +27,11 @@ test "zip" {
     const allocator = arenaAllocator.allocator();
     defer arenaAllocator.deinit();
      
-    try VFS.readZip(allocator, "/home/tobi/dld/client/client.jar");
-    try VFS.readZip(allocator, "/home/tobi/doc/ghidra/support/LaunchSupport.jar");
-    _ = try VFS.readJar("/home/tobi/dld/client/client.jar", "net/minecraft/client/main/Main.class", allocator);
-    _ = try VFS.readJar("/home/tobi/doc/ghidra/support/LaunchSupport.jar", "LaunchSupport.class", allocator);
+    // try VFS.walkJar(allocator, "/home/tobi/dld/client/client.jar");
+    // try VFS.walkJar(allocator, "/home/tobi/doc/ghidra/support/LaunchSupport.jar");
+    // _ = try VFS.readJar("/home/tobi/dld/client/client.jar", "net/minecraft/client/main/Main.class", allocator);
+    // _ = try VFS.readJar("/home/tobi/doc/ghidra/support/LaunchSupport.jar", "LaunchSupport.class", allocator);
+    _ = try VFS.readDir("/home/tobi/doc/projects/casino/out/production/casino/", "src/Main.class", allocator);
 }
 
 pub fn printClassFile(classFile: *const ClassFile.ClassFile, writer: *std.Io.Writer) !void {

@@ -10,6 +10,8 @@ const Validator = @import("ClassFileValidator.zig");
 const zip = @import("ZipHelper.zig");
 const Archive = zip.Archive;
 
+const Self = @This();
+
 const InternalError = error {
     StatFailed,
     MemoryError,
@@ -45,7 +47,7 @@ const Manifest = struct {
 paths: std.StringHashMap(*const ClassFile),
 
 
-pub fn readZip(allocator: Allocator, path: []const u8) !void {
+pub fn walkJar(allocator: Allocator, path: []const u8) !void {
     var archive = try Archive.init(path, allocator);
     defer archive.deinit();
 
@@ -62,7 +64,7 @@ pub fn readZip(allocator: Allocator, path: []const u8) !void {
     }
 }
 
-pub fn readJar(path: []const u8, classpath: ?[]const u8, allocator: Allocator) !@This() {
+pub fn readJar(path: []const u8, classpath: ?[]const u8, allocator: Allocator) !Self {
     var archive = try Archive.init(path, allocator);
     defer archive.deinit();
 
@@ -78,37 +80,86 @@ pub fn readJar(path: []const u8, classpath: ?[]const u8, allocator: Allocator) !
 
     const root = try parseClassFromArchive(&archive, filename);
 
-    var vfs: @This() = .{ .paths = std.StringHashMap(*const ClassFile).init(allocator) };
+    var vfs: Self = .{ .paths = std.StringHashMap(*const ClassFile).init(allocator) };
     vfs.paths.put(root.constant_pool[root.this_class].Utf8.bytes, &root) catch return InternalError.MemoryError;
 
     // archive needs .class extension that is not present in classfile paths
-    var classfile_name = [_]u8{0} ** 128;
+    var classfile_name = [_]u8{0} ** 512;
     const dot_class = ".class";
-    for(dot_class, 121..) |c, it| {
+    for(dot_class, 505..) |c, it| {
         classfile_name[it] = c;
     }
 
-    for(root.constant_pool) |pool| {
-        if(std.meta.activeTag(pool) != .Class) continue; 
-
-        const class = root.constant_pool[pool.Class.name_index - 1].Utf8.bytes;
-        if(!vfs.paths.contains(class)) {
-            const class_slice = classfile_name[121-class.len..];
-            std.mem.copyForwards(u8, class_slice, class);
-            const dep = parseClassFromArchive(&archive, class_slice)
-                catch |err| switch(err) { 
-                    ZipError.InvalidFileName => {
-                        std.debug.print("warning: {s} not found in archive!\n", .{class_slice});
-                        continue;
-                    },
-                    else => |e| return e,
-                };
-            std.debug.print("added {s}\n", .{class});
-            vfs.paths.put(class, &dep) catch return InternalError.MemoryError;
-        }
-    }
+    try vfs.addDependencyRecursiveFromArchive(&archive, &classfile_name, &root);
 
     return vfs;
+}
+
+pub fn readDir(path: []const u8, classpath: [:0]const u8, allocator: Allocator) !Self {
+
+    const abs_path = fs.cwd().realpathAlloc(allocator, path) catch return InternalError.MemoryError;
+    defer allocator.free(abs_path);
+    const dir = fs.cwd().makeOpenPath(abs_path, .{}) catch return DirError.OpeningFailed;
+
+    const root = try parseClassFromDir(dir, classpath, allocator);
+
+    var vfs: Self = .{ .paths = std.StringHashMap(*const ClassFile).init(allocator) };
+    vfs.paths.put(root.constant_pool[root.this_class].Utf8.bytes, &root) catch return InternalError.MemoryError;
+
+    // archive needs .class extension that is not present in classfile paths
+    var classfile_name = [_]u8{0} ** 512;
+    const dot_class = ".class";
+    for(dot_class, 505..) |c, it| {
+        classfile_name[it] = c;
+    }
+
+    try vfs.addDependencyRecursiveFromDir(dir, allocator, &classfile_name, &root);
+
+    return vfs;
+}
+
+pub fn addDependencyRecursiveFromArchive(self: *Self, archive: *Archive, classfile_name: []u8, classFile: *const ClassFile) !void {
+    for(classFile.constant_pool) |pool| {
+        if(std.meta.activeTag(pool) != .Class) continue;
+    
+        const class = classFile.constant_pool[pool.Class.name_index - 1].Utf8.bytes;
+        if(self.paths.contains(class)) continue;
+
+        const class_slice = classfile_name[505-class.len..];
+        std.mem.copyForwards(u8, class_slice, class);
+        const dep = parseClassFromArchive(archive, class_slice)
+            catch |err| switch(err) { 
+                ZipError.InvalidFileName => {
+                    std.debug.print("warning: {s} not found in archive!\n", .{class_slice});
+                    continue;
+                },
+                else => |e| return e,
+            };
+        self.paths.put(class, &dep) catch return InternalError.MemoryError;
+        try self.addDependencyRecursiveFromArchive(archive, classfile_name, &dep);
+    }
+}
+
+pub fn addDependencyRecursiveFromDir(self: *Self, dir: fs.Dir, allocator: Allocator, classfile_name: []u8, classFile: *const ClassFile) !void {
+    for(classFile.constant_pool) |pool| {
+        if(std.meta.activeTag(pool) != .Class) continue;
+    
+        const class = classFile.constant_pool[pool.Class.name_index - 1].Utf8.bytes;
+        if(self.paths.contains(class)) continue;
+
+        const class_slice = classfile_name[505-class.len..];
+        std.mem.copyForwards(u8, class_slice, class);
+        const dep = parseClassFromDir(dir, @ptrCast(class_slice), allocator)
+            catch |err| switch(err) { 
+                DirError.OpeningFailed => {
+                    std.debug.print("warning: {s} not found in archive!\n", .{class_slice});
+                    continue;
+                },
+                else => |e| return e,
+            };
+        self.paths.put(class, &dep) catch return InternalError.MemoryError;
+        try self.addDependencyRecursiveFromDir(dir, allocator, classfile_name, &dep);
+    }
 }
 
 pub fn parseClassFromArchive(archive: *Archive, name: []const u8) !ClassFile {
@@ -120,8 +171,8 @@ pub fn parseClassFromArchive(archive: *Archive, name: []const u8) !ClassFile {
     return result;
 }
 
-pub fn parseClassFromDir(dir: fs.Dir, name: []const u8, allocator: Allocator) DirError!ClassFile {
-    const source = dir.openFile(name, .{}) catch return DirError.OpeningFailed;
+pub fn parseClassFromDir(dir: fs.Dir, name: [:0]const u8, allocator: Allocator) DirError!ClassFile {
+    const source = dir.openFileZ(name, .{}) catch return DirError.OpeningFailed;
     defer source.close();
     
     const stat = source.stat() catch return DirError.StatFailed;
