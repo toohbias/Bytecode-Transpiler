@@ -3,27 +3,14 @@ const fs = std.fs;
 const Allocator = std.mem.Allocator;
 const Reader = std.Io.Reader;
 
-const ClassFile = @import("ClassFile.zig").ClassFile;
-const Parser = @import("ClassFileParser.zig");
-const Validator = @import("ClassFileValidator.zig");
+const Errors = @import("../Errors.zig");
+
+const ClassFile = @import("../bytecode/ClassFile.zig");
 
 const zip = @import("ZipHelper.zig");
 const Archive = zip.Archive;
 
 const Self = @This();
-
-const InternalError = error {
-    StatFailed,
-    MemoryError,
-} || Parser.ParseError;
-
-const ZipError = zip.ZipError;
-
-const DirError = error {
-    OpeningFailed,
-} || InternalError;
-
-const VfsError = ZipError || DirError;
 
 const Manifest = struct {
     @"Manifest-Version": ?[]const u8 = null,
@@ -47,7 +34,7 @@ const Manifest = struct {
 paths: std.StringHashMap(*const ClassFile),
 
 
-pub fn walkJar(allocator: Allocator, path: []const u8) !void {
+pub fn walkJar(allocator: Allocator, path: []const u8) Errors.VFSParseError!void {
     var archive = try Archive.init(path, allocator);
     defer archive.deinit();
 
@@ -60,11 +47,11 @@ pub fn walkJar(allocator: Allocator, path: []const u8) !void {
     
         var reader = std.Io.Reader.fixed(elem.getContent());
         var cf = try ClassFile.parse(&reader, allocator);
-        Validator.validate(&cf, &reader, .{});
+        cf.validate(&reader, .{});
     }
 }
 
-pub fn readJar(path: []const u8, classpath: ?[]const u8, allocator: Allocator) !Self {
+pub fn readJar(path: []const u8, classpath: ?[]const u8, allocator: Allocator) Errors.VFSParseError!Self {
     var archive = try Archive.init(path, allocator);
     defer archive.deinit();
 
@@ -75,13 +62,13 @@ pub fn readJar(path: []const u8, classpath: ?[]const u8, allocator: Allocator) !
     else if(manifest) |manifest_obj|
         if(manifest_obj.@"Main-Class") |main_class|
             main_class
-        else return ZipError.InvalidClassFilePath
-    else return ZipError.InvalidClassFilePath;
+        else return Errors.JarError.InvalidClassFilePath
+    else return Errors.JarError.InvalidClassFilePath;
 
     const root = try parseClassFromArchive(&archive, filename);
 
     var vfs: Self = .{ .paths = std.StringHashMap(*const ClassFile).init(allocator) };
-    vfs.paths.put(root.constant_pool[root.this_class].Utf8.bytes, &root) catch return InternalError.MemoryError;
+    vfs.paths.put(root.constant_pool[root.this_class].Utf8.bytes, &root) catch return Errors.MemoryError;
 
     // archive needs .class extension that is not present in classfile paths
     var classfile_name = [_]u8{0} ** 512;
@@ -95,16 +82,16 @@ pub fn readJar(path: []const u8, classpath: ?[]const u8, allocator: Allocator) !
     return vfs;
 }
 
-pub fn readDir(path: []const u8, classpath: [:0]const u8, allocator: Allocator) !Self {
+pub fn readDir(path: []const u8, classpath: [:0]const u8, allocator: Allocator) Errors.VFSParseError!Self {
 
-    const abs_path = fs.cwd().realpathAlloc(allocator, path) catch return InternalError.MemoryError;
+    const abs_path = fs.cwd().realpathAlloc(allocator, path) catch return Errors.MemoryError;
     defer allocator.free(abs_path);
-    const dir = fs.cwd().makeOpenPath(abs_path, .{}) catch return DirError.OpeningFailed;
+    const dir = fs.cwd().makeOpenPath(abs_path, .{}) catch return Errors.FileSystemError.OpeningFailed;
 
     const root = try parseClassFromDir(dir, classpath, allocator);
 
     var vfs: Self = .{ .paths = std.StringHashMap(*const ClassFile).init(allocator) };
-    vfs.paths.put(root.constant_pool[root.this_class].Utf8.bytes, &root) catch return InternalError.MemoryError;
+    vfs.paths.put(root.constant_pool[root.this_class].Utf8.bytes, &root) catch return Errors.MemoryError;
 
     // archive needs .class extension that is not present in classfile paths
     var classfile_name = [_]u8{0} ** 512;
@@ -118,7 +105,7 @@ pub fn readDir(path: []const u8, classpath: [:0]const u8, allocator: Allocator) 
     return vfs;
 }
 
-pub fn addDependencyRecursiveFromArchive(self: *Self, archive: *Archive, classfile_name: []u8, classFile: *const ClassFile) !void {
+pub fn addDependencyRecursiveFromArchive(self: *Self, archive: *Archive, classfile_name: []u8, classFile: *const ClassFile) Errors.VFSParseError!void {
     for(classFile.constant_pool) |pool| {
         if(std.meta.activeTag(pool) != .Class) continue;
     
@@ -129,18 +116,18 @@ pub fn addDependencyRecursiveFromArchive(self: *Self, archive: *Archive, classfi
         std.mem.copyForwards(u8, class_slice, class);
         const dep = parseClassFromArchive(archive, class_slice)
             catch |err| switch(err) { 
-                ZipError.InvalidFileName => {
+                Errors.ZipError.InvalidFileName => {
                     std.debug.print("warning: {s} not found in archive!\n", .{class_slice});
                     continue;
                 },
                 else => |e| return e,
             };
-        self.paths.put(class, &dep) catch return InternalError.MemoryError;
+        self.paths.put(class, &dep) catch return Errors.MemoryError;
         try self.addDependencyRecursiveFromArchive(archive, classfile_name, &dep);
     }
 }
 
-pub fn addDependencyRecursiveFromDir(self: *Self, dir: fs.Dir, allocator: Allocator, classfile_name: []u8, classFile: *const ClassFile) !void {
+pub fn addDependencyRecursiveFromDir(self: *Self, dir: fs.Dir, allocator: Allocator, classfile_name: []u8, classFile: *const ClassFile) Errors.VFSParseError!void {
     for(classFile.constant_pool) |pool| {
         if(std.meta.activeTag(pool) != .Class) continue;
     
@@ -151,43 +138,43 @@ pub fn addDependencyRecursiveFromDir(self: *Self, dir: fs.Dir, allocator: Alloca
         std.mem.copyForwards(u8, class_slice, class);
         const dep = parseClassFromDir(dir, @ptrCast(class_slice), allocator)
             catch |err| switch(err) { 
-                DirError.OpeningFailed => {
+                Errors.FileSystemError.OpeningFailed => {
                     std.debug.print("warning: {s} not found in archive!\n", .{class_slice});
                     continue;
                 },
                 else => |e| return e,
             };
-        self.paths.put(class, &dep) catch return InternalError.MemoryError;
+        self.paths.put(class, &dep) catch return Errors.MemoryError;
         try self.addDependencyRecursiveFromDir(dir, allocator, classfile_name, &dep);
     }
 }
 
-pub fn parseClassFromArchive(archive: *Archive, name: []const u8) !ClassFile {
+pub fn parseClassFromArchive(archive: *Archive, name: []const u8) Errors.VFSParseError!ClassFile {
     var file = try archive.getElementByName(name);
 
     var reader = std.Io.Reader.fixed(file.getContent());
     var result = try ClassFile.parse(&reader, archive.allocator);
-    Validator.validate(&result, &reader, .{});
+    result.validate(&reader, .{});
     return result;
 }
 
-pub fn parseClassFromDir(dir: fs.Dir, name: [:0]const u8, allocator: Allocator) DirError!ClassFile {
-    const source = dir.openFileZ(name, .{}) catch return DirError.OpeningFailed;
+pub fn parseClassFromDir(dir: fs.Dir, name: [:0]const u8, allocator: Allocator) Errors.VFSParseError!ClassFile {
+    const source = dir.openFileZ(name, .{}) catch return Errors.FileSystemError.OpeningFailed;
     defer source.close();
     
-    const stat = source.stat() catch return DirError.StatFailed;
-    const buffer: []u8 = source.readToEndAlloc(allocator, stat.size) catch return InternalError.MemoryError;
+    const stat = source.stat() catch return Errors.FileSystemError.StatFailed;
+    const buffer: []u8 = source.readToEndAlloc(allocator, stat.size) catch return Errors.MemoryError;
 
     var reader = std.Io.Reader.fixed(buffer);
     var result = try ClassFile.parse(&reader, allocator);
-    Validator.validate(&result, &reader, .{});
+    result.validate(&reader, .{});
     return result;
 }
 
-fn extractManifest(archive: *Archive) !?Manifest {
+fn extractManifest(archive: *Archive) Errors.VFSError!?Manifest {
     const name: []const u8 = "META-INF/MANIFEST.MF";
     var manifest_elem = archive.getElementByName(name) catch |err| switch(err) {
-        ZipError.InvalidFileName => return null,
+        Errors.ZipError.InvalidFileName => return null,
         else => return err,
     };
 

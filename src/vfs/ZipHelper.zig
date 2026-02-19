@@ -1,20 +1,9 @@
 const std = @import("std");
 const miniz = @cImport(@cInclude("miniz.h"));
-
 pub const True = miniz.MZ_TRUE;
 
-// TODO make centralized error
-const InternalError = error {
-    MemoryError,
-};
-
-pub const ZipError = error {
-    InitFailed,
-    StatFailed,
-    ExtractionFailed,
-    InvalidClassFilePath,
-    InvalidFileName,
-} || InternalError;
+const Errors = @import("../Errors.zig");
+const ZipError = Errors.ZipError;
 
 pub const Archive = struct {
     archive: *miniz.mz_zip_archive,
@@ -23,7 +12,7 @@ pub const Archive = struct {
     const Self = @This();
 
     pub fn init(path: []const u8, allocator: std.mem.Allocator) ZipError!Self {
-        const archive = allocator.create(miniz.mz_zip_archive) catch return InternalError.MemoryError;
+        const archive = allocator.create(miniz.mz_zip_archive) catch return Errors.MemoryError;
         errdefer allocator.destroy(archive);
         miniz.mz_zip_zero_struct(archive);
 
@@ -51,7 +40,7 @@ pub const Archive = struct {
         var reader = std.Io.Reader.fixed(&stat.m_filename);
         const name_len = reader.discardDelimiterInclusive(0) catch return ZipError.InvalidFileName;
 
-        const buffer = self.allocator.alloc(u8, stat.m_uncomp_size) catch return InternalError.MemoryError;
+        const buffer = self.allocator.alloc(u8, stat.m_uncomp_size) catch return Errors.MemoryError;
         if(stat.m_is_directory != True) {
             if(miniz.mz_zip_reader_extract_to_mem(self.archive, @intCast(index), buffer.ptr, buffer.len, 0) != True) 
                 return ZipError.ExtractionFailed;

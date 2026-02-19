@@ -1,20 +1,17 @@
 const std = @import("std");
 const log = std.log.scoped(.ClassFileValidation);
+
+const FormatError = @import("../Errors.zig").FormatError;
+
 const ClassFile = @import("ClassFile.zig");
 const cp_info = ClassFile.cp_info;
 
-const LoggingOptions = struct {
+pub const LoggingOptions = struct {
     verbose: bool = false,
 };
 
-const FormatError = error {
-    InvalidMagic,
-    InvalidFileLength,
-    InvalidConstantPool,
-};
-
 // ClassFile Spec 4.8
-pub fn validate(classFile: *ClassFile.ClassFile, reader: *std.Io.Reader, options: LoggingOptions) void {
+pub fn validate(classFile: *ClassFile, reader: *std.Io.Reader, options: LoggingOptions) void {
     const class_name = classFile.constant_pool[
         classFile.constant_pool[
             classFile.this_class-1
@@ -43,7 +40,7 @@ fn validateReader(reader: *std.Io.Reader, class_name: []u8, options: LoggingOpti
     if(options.verbose) log.info("{s} passed file length validation", .{class_name});
 }
 
-fn validateConstantPool(classFile: *ClassFile.ClassFile, class_name: []u8, options: LoggingOptions) FormatError!void {
+fn validateConstantPool(classFile: *ClassFile, class_name: []u8, options: LoggingOptions) FormatError!void {
     const constant_pool = classFile.constant_pool;
     var bootstrap_method_count: u16 = 0;
     for(classFile.attributes) |a| {

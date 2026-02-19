@@ -2,46 +2,57 @@ const std = @import("std");
 const Reader = std.Io.Reader;
 const Allocator = std.mem.Allocator;
 
+const Errors = @import("../Errors.zig");
+
 const OpCode = @import("OpCode.zig").OpCode;
-
 const Parser = @import("ClassFileParser.zig");
+const Validator = @import("ClassFileValidator.zig");
 
-pub const ClassFile = struct {
-    magic: u32,
-    minor_version: u16,
-    major_version: u16,
-    constant_pool_count: u16,
-    constant_pool: []cp_info,
-    access_flags: u16,
-    this_class: u16,
-    super_class: u16,
-    interfaces_count: u16,
-    interfaces: []u16,
-    fields_count: u16,
-    fields: []field_info,
-    methods_count: u16,
-    methods: []method_info,
-    attributes_count: u16,
-    attributes: []attribute_info,
+const Self = @This();
 
-    pub const access_flags_mask = enum(u16) {
-        ACC_PUBLIC = 0x0001,
-        ACC_FINAL = 0x0010,
-        ACC_SUPER = 0x0020,
-        ACC_INTERFACE = 0x0200,
-        ACC_ABSTRACT = 0x0400,
-        ACC_SYNTHETIC = 0x1000,
-        ACC_ANNOTATION = 0x2000,
-        ACC_ENUM = 0x4000,
-        ACC_MODULE = 0x8000,
-    };
+//---------- Fields ----------//
 
-    pub fn parse(reader: *Reader, allocator: Allocator) Parser.ParseError!ClassFile {
-        var cf: ClassFile = undefined;
-        _ =  try Parser.parseGenericStruct(ClassFile, &cf, reader, allocator);
-        return cf;
-    }
+magic: u32,
+minor_version: u16,
+major_version: u16,
+constant_pool_count: u16,
+constant_pool: []cp_info,
+access_flags: u16,
+this_class: u16,
+super_class: u16,
+interfaces_count: u16,
+interfaces: []u16,
+fields_count: u16,
+fields: []field_info,
+methods_count: u16,
+methods: []method_info,
+attributes_count: u16,
+attributes: []attribute_info,
+
+
+pub const access_flags_mask = enum(u16) {
+    ACC_PUBLIC = 0x0001,
+    ACC_FINAL = 0x0010,
+    ACC_SUPER = 0x0020,
+    ACC_INTERFACE = 0x0200,
+    ACC_ABSTRACT = 0x0400,
+    ACC_SYNTHETIC = 0x1000,
+    ACC_ANNOTATION = 0x2000,
+    ACC_ENUM = 0x4000,
+    ACC_MODULE = 0x8000,
 };
+
+pub fn parse(reader: *Reader, allocator: Allocator) Errors.ParseError!Self {
+    var cf: Self = undefined;
+    _ =  try Parser.parseGenericStruct(Self, &cf, reader, allocator);
+    return cf;
+}
+
+pub fn validate(self: *Self, reader: *Reader, options: Validator.LoggingOptions) void {
+    Validator.validate(self, reader, options);
+}
+
+//------ Helper Structs ------//
 
 pub const cp_info = union(enum(u8)) {
     Empty: struct {} = 0, // not in spec; set after Long/Double
@@ -120,13 +131,13 @@ pub const cp_info = union(enum(u8)) {
         T: type, 
         parent: anytype, 
         comptime _: usize, 
-        instance: *ClassFile, 
+        instance: *Self, 
         reader: *Reader, 
         allocator: Allocator
-    ) Parser.ParseError!T {
+    ) Errors.ParseError!T {
     
         const size = @field(parent, "constant_pool_count") - 1;
-        var result = allocator.alloc(cp_info, size) catch return Parser.InternalError.MemoryError;
+        var result = allocator.alloc(cp_info, size) catch return Errors.MemoryError;
         for(0..size) |it| {
             if(it != 0 and (result[it-1] == .Long or result[it-1] == .Double)) {
                 result[it] = cp_info{ .Empty = .{} };
@@ -423,10 +434,10 @@ pub const attribute_info = struct {
             T: type, 
             parent: anytype, 
             comptime _: usize, 
-            instance: *ClassFile,
+            instance: *Self,
             reader: *Reader, 
             allocator: Allocator
-        ) Parser.ParseError!T {
+        ) Errors.ParseError!T {
 
             const attr_name = instance.*.constant_pool[parent.attribute_name_index - 1].Utf8.bytes;
             const enumVariant = std.meta.stringToEnum(@typeInfo(@FieldType(attribute_info, "info")).@"union".tag_type.?, attr_name);
@@ -435,7 +446,7 @@ pub const attribute_info = struct {
                     const fieldType = @FieldType(T, @tagName(t));
                     return @unionInit(T, @tagName(t), try Parser.parseGenericStruct(fieldType, instance, reader, allocator));
                 }}
-            } else return Parser.MalformedError.InvalidEnumType;
+            } else return Errors.MalformedError.InvalidEnumType;
         }
     }
 };
@@ -490,10 +501,11 @@ pub const type_annotation = struct {
             T: type,
             parent: anytype,
             comptime _: usize,
-            instance: *ClassFile,
+            instance: *Self,
             reader: *Reader,
             allocator: Allocator
-        ) Parser.ParseError!T {
+        ) Errors.ParseError!T {
+
             return switch(parent.target_type) {
                 inline 0x00, 0x01 => @unionInit(
                     T, "type_parameter_target", 
@@ -535,7 +547,7 @@ pub const type_annotation = struct {
                     T, "type_argument_target", 
                     try Parser.parseGenericStruct(@FieldType(T, "type_argument_target"), instance, reader, allocator)
                 ),
-                inline else => return Parser.MalformedError.InvalidEnumType,
+                inline else => return Errors.MalformedError.InvalidEnumType,
             };
         }
     },
@@ -555,7 +567,7 @@ pub const type_path = struct {
         type_argument_kind: u8,
     },
 
-    pub fn callback(T: type, _: anytype, comptime _: usize, i: *ClassFile, r: *Reader, a: Allocator) Parser.ParseError!T {
+    pub fn callback(T: type, _: anytype, comptime _: usize, i: *Self, r: *Reader, a: Allocator) Errors.ParseError!T {
         return try Parser.parseGenericStruct(T, i, r, a);
     }
 };
@@ -602,10 +614,11 @@ pub const element_value = struct {
             T: type,
             parent: anytype,
             comptime _: usize,
-            instance: *ClassFile,
+            instance: *Self,
             reader: *Reader,
             allocator: Allocator
-        ) Parser.ParseError!T {
+        ) Errors.ParseError!T {
+
             return switch(parent.tag) {
                 inline .byte, .char, .double, 
                 .float, .int, .long, 
@@ -633,7 +646,7 @@ pub const element_value = struct {
         }
     },
 
-    pub fn callback(T: type, p: anytype, comptime f_i: usize, i: *ClassFile, r: *Reader, a: Allocator) Parser.ParseError!T {
+    pub fn callback(T: type, p: anytype, comptime f_i: usize, i: *Self, r: *Reader, a: Allocator) Errors.ParseError!T {
         switch (@typeInfo(T)) {
             .pointer => return try Parser.defaultArrCallback(T, p, f_i, i, r, a),
             .@"struct" => return try Parser.parseGenericStruct(T, i, r, a),
@@ -657,10 +670,11 @@ pub const verification_type_info = union(enum(u8)) {
         T: type,
         parent: anytype,
         comptime field_index: usize,
-        instance: *ClassFile,
+        instance: *Self,
         reader: *Reader,
         allocator: Allocator
-    ) Parser.ParseError!T {
+    ) Errors.ParseError!T {
+
         const size = switch(try stack_map_frame.frame_type(@field(parent, "frame_type"))) {
             .same_locals_1_stack_item_frame, .same_locals_1_stack_item_frame_extended => 1,
             .append_frame => @field(parent, "frame_type") - 251,
@@ -670,7 +684,9 @@ pub const verification_type_info = union(enum(u8)) {
             },
             else => unreachable,
         };
-        var result = allocator.alloc(verification_type_info, size) catch return Parser.InternalError.MemoryError; 
+
+        var result = allocator.alloc(verification_type_info, size) catch return Errors.MemoryError; 
+
         for(0..size) |it| {
             const enumVariant = try Parser.defaultEnumCallback(
                 @typeInfo(verification_type_info).@"union".tag_type.?, 
@@ -729,15 +745,17 @@ pub const stack_map_frame = union(enum) {
         T: type, 
         parent: anytype, 
         comptime _ : usize, 
-        instance: *ClassFile,
+        instance: *Self,
         reader: *Reader, 
         allocator: Allocator
-    ) Parser.ParseError!T {
+    ) Errors.ParseError!T {
         
         const size = @field(parent, "number_of_entries");
-        var result = allocator.alloc(stack_map_frame, size) catch return Parser.InternalError.MemoryError;
+
+        var result = allocator.alloc(stack_map_frame, size) catch return Errors.MemoryError;
+
         for(0..size) |it| {
-            const enumVariant = try frame_type(reader.peekByte() catch return Parser.InternalError.ReadFailed);
+            const enumVariant = try frame_type(reader.peekByte() catch return Errors.ReadFailed);
             switch(enumVariant) { inline else => |ev| {
                 const tagName = @tagName(ev);
                 const fieldType = @FieldType(stack_map_frame, tagName);
@@ -751,7 +769,7 @@ pub const stack_map_frame = union(enum) {
         return result;
     }
 
-    fn frame_type(kind: u8) Parser.ParseError!@typeInfo(stack_map_frame).@"union".tag_type.? {
+    fn frame_type(kind: u8) Errors.ParseError!@typeInfo(stack_map_frame).@"union".tag_type.? {
         return switch(kind) {
             0...63    => .same_frame,
             64...127  => .same_locals_1_stack_item_frame,
@@ -760,7 +778,7 @@ pub const stack_map_frame = union(enum) {
             251       => .same_frame_extended,
             252...254 => .append_frame,
             255       => .full_frame,
-            else      => return Parser.MalformedError.InvalidEnumType,
+            else      => return Errors.MalformedError.InvalidEnumType,
         };
     }
 };

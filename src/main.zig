@@ -1,8 +1,6 @@
 const std = @import("std");
-const Bytecode_Transpiler = @import("Bytecode_Transpiler");
-const Validator = @import("ClassFileValidator.zig");
-const ClassFile = @import("ClassFile.zig");
-const VFS = @import("VFS.zig");
+const ClassFile = @import("bytecode/ClassFile.zig");
+const VFS = @import("vfs/VFS.zig");
 
 pub fn main() void {}
 
@@ -34,7 +32,7 @@ test "zip" {
     _ = try VFS.readDir("/home/tobi/doc/projects/casino/out/production/casino/", "src/Main.class", allocator);
 }
 
-pub fn printClassFile(classFile: *const ClassFile.ClassFile, writer: *std.Io.Writer) !void {
+pub fn printClassFile(classFile: *const ClassFile, writer: *std.Io.Writer) !void {
     @setEvalBranchQuota(500000);
     try std.json.Stringify.value(classFile.*, .{ .whitespace = .indent_2}, writer);
     try writer.flush();

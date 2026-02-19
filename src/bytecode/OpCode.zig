@@ -2,9 +2,9 @@ const std = @import("std");
 const Reader = std.Io.Reader;
 const Allocator = std.mem.Allocator;
 
-const Parser = @import("ClassFileParser.zig");
+const Errors = @import("../Errors.zig");
 
-const ClassFile = @import("ClassFile.zig").ClassFile;
+const ClassFile = @import("ClassFile.zig");
 
 pub const OpCode = union(enum(u8)) {
     // Constants
@@ -306,26 +306,26 @@ pub const OpCode = union(enum(u8)) {
         instance: *ClassFile,
         reader: *Reader, 
         allocator: Allocator
-    ) Parser.ParseError!T {
+    ) Errors.ParseError!T {
 
         _ = .{field_index, instance};
         const size: u32 = @field(parent, "code_length");
-        const result = allocator.alloc(OpCode, size) catch return Parser.InternalError.MemoryError;
+        const result = allocator.alloc(OpCode, size) catch return Errors.MemoryError;
         var offset: u32 = 0;
         var it: u32 = 0;
         while(offset < size) {
             result[it], offset = try parse(offset, reader, allocator);
             it += 1;
         }
-        if(offset != size) return Parser.MalformedError.InvalidCodeLength;
+        if(offset != size) return Errors.MalformedError.InvalidCodeLength;
         return allocator.remap(result, it).?;
     }
 
-    pub fn parse(offset: u32, reader: *Reader, allocator: Allocator) Parser.ParseError!struct { OpCode, u32 } {
+    pub fn parse(offset: u32, reader: *Reader, allocator: Allocator) Errors.ParseError!struct { OpCode, u32 } {
         var new_offset = offset;
         const enumVariant = std.enums.fromInt(
             @typeInfo(OpCode).@"union".tag_type.?,
-            reader.takeByte() catch return Parser.InternalError.ReadFailed
+            reader.takeByte() catch return Errors.ReadFailed
         ).?;
         new_offset += 1;
         return switch(enumVariant) {
@@ -333,16 +333,19 @@ pub const OpCode = union(enum(u8)) {
                 const padding = if(new_offset % 4 == 0) 0 else 4 - (new_offset % 4);
                 reader.toss(padding); // padding
                 new_offset += padding;
-                const default = reader.takeInt(i32, .big) catch return Parser.InternalError.ReadFailed;
-                const low = reader.takeInt(i32, .big) catch return Parser.InternalError.ReadFailed;
-                const high = reader.takeInt(i32, .big) catch return Parser.InternalError.ReadFailed;
+                const default = reader.takeInt(i32, .big) catch return Errors.ReadFailed;
+                const low = reader.takeInt(i32, .big) catch return Errors.ReadFailed;
+                const high = reader.takeInt(i32, .big) catch return Errors.ReadFailed;
                 new_offset += 12;
                 const size = high - low + 1;
-                const offsets = allocator.alloc(i32, @intCast(size)) catch return Parser.InternalError.MemoryError;
+
+                const offsets = allocator.alloc(i32, @intCast(size)) catch return Errors.MemoryError;
+
                 for(0..@intCast(size)) |it| {
-                    offsets[it] = reader.takeInt(i32, .big) catch return Parser.InternalError.ReadFailed;
+                    offsets[it] = reader.takeInt(i32, .big) catch return Errors.ReadFailed;
                     new_offset += 4;
                 }
+
                 break :ret .{
                     @unionInit(OpCode, "tableswitch", .{
                         .default = default,
@@ -358,20 +361,23 @@ pub const OpCode = union(enum(u8)) {
                 const padding = if(new_offset % 4 == 0) 0 else 4 - (new_offset % 4);
                 reader.toss(padding); // padding
                 new_offset += padding;
-                const default = reader.takeInt(i32, .big) catch return Parser.InternalError.ReadFailed;
-                const npairs = reader.takeInt(i32, .big) catch return Parser.InternalError.ReadFailed;
+                const default = reader.takeInt(i32, .big) catch return Errors.ReadFailed;
+                const npairs = reader.takeInt(i32, .big) catch return Errors.ReadFailed;
                 new_offset += 8;
+
                 const pairs = allocator.alloc(
                     @FieldType(OpCode, "lookupswitch").pair, 
                     @intCast(npairs)
-                ) catch return Parser.InternalError.MemoryError;
+                ) catch return Errors.MemoryError;
+
                 for(0..@intCast(npairs)) |it| {
                     pairs[it] = .{
-                        .match = reader.takeInt(i32, .big) catch return Parser.InternalError.ReadFailed,
-                        .offset = reader.takeInt(i32, .big) catch return Parser.InternalError.ReadFailed,
+                        .match = reader.takeInt(i32, .big) catch return Errors.ReadFailed,
+                        .offset = reader.takeInt(i32, .big) catch return Errors.ReadFailed,
                     };
                     new_offset += 8;
                 }
+
                 break :ret .{
                     @unionInit(OpCode, "lookupswitch", .{
                         .default = default,
@@ -391,13 +397,13 @@ pub const OpCode = union(enum(u8)) {
         };
     }
 
-    fn parseOp(offset: u32, T: type, reader: *Reader) Parser.ParseError!struct { T, u32 } {
+    fn parseOp(offset: u32, T: type, reader: *Reader) Errors.ParseError!struct { T, u32 } {
         var new_offset = offset;
         var result: T = undefined;
         inline for(@typeInfo(T).@"struct".fields) |f| {
             @field(result, f.name) = switch(@typeInfo(f.type)) {
                 .int => ret: {
-                    const int = reader.takeInt(f.type, .big) catch return Parser.InternalError.ReadFailed;
+                    const int = reader.takeInt(f.type, .big) catch return Errors.ReadFailed;
                     new_offset += @sizeOf(f.type);
                     break :ret int;
                 },
@@ -406,7 +412,7 @@ pub const OpCode = union(enum(u8)) {
                     if(enumTag.@"enum".tag_type == u8) {
                         const enumVariant = std.enums.fromInt(
                             @Type(enumTag), 
-                            reader.takeByte() catch return Parser.InternalError.ReadFailed
+                            reader.takeByte() catch return Errors.ReadFailed
                         ).?;
                         new_offset += 1;
                         switch(enumVariant) { inline else => |t| {
@@ -419,8 +425,8 @@ pub const OpCode = union(enum(u8)) {
                 .@"enum" => ret: {
                     const e = std.meta.intToEnum(
                         f.type, 
-                        reader.takeByte() catch return Parser.InternalError.ReadFailed
-                    ) catch return Parser.MalformedError.InvalidEnumType;
+                        reader.takeByte() catch return Errors.ReadFailed
+                    ) catch return Errors.MalformedError.InvalidEnumType;
                     new_offset += 1;
                     break :ret e;
                 },
