@@ -44,12 +44,22 @@ pub const access_flags_mask = enum(u16) {
 
 pub fn parse(reader: *Reader, allocator: Allocator) Errors.ParseError!Self {
     var cf: Self = undefined;
-    _ =  try Parser.parseGenericStruct(Self, &cf, reader, allocator);
+    _ = try Parser.parseGenericStruct(Self, &cf, reader, allocator);
     return cf;
 }
 
 pub fn validate(self: *Self, reader: *Reader, options: Validator.LoggingOptions) void {
     Validator.validate(self, reader, options);
+}
+
+pub fn parseAndValidate(reader: *Reader, allocator: Allocator, options: Validator.LoggingOptions) Errors.ParseError!Self {
+    var cf = try parse(reader, allocator);
+    cf.validate(reader, options);
+    return cf;
+}
+
+pub fn getName(self: *const Self) []const u8 {
+    return self.constant_pool[self.constant_pool[self.this_class - 1].Class.name_index - 1].Utf8.bytes;
 }
 
 //------ Helper Structs ------//

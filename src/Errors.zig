@@ -49,10 +49,13 @@ pub const JarError = error {
     InvalidClassFilePath,
 };
 
-pub const VFSError = FileSystemError
-                ||   ZipError
-                ||   JarError
-                 ;
+
+pub const VFSError = error {
+    InvalidInput,
+} || FileSystemError
+  || ZipError
+  || JarError
+   ;
 
 pub const VFSParseError = VFSError
                      ||   ParseError
